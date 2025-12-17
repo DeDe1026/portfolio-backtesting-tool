@@ -1,0 +1,16 @@
+{
+  "mean": 1973491.323661911,
+  "median": 1945149.3661569995,
+  "p10": 1436762.3895785562,
+  "p90": 2535625.5923210243,
+  "min": 952876.8168030942,
+  "max": 3614566.9116019206,
+  "survival_rate": 1.0,
+  "label": "IID monthly bootstrap (alpha=0)",
+  "params": {
+    "n_paths": 500,
+    "random_state": 42,
+    "bootstrap_mode": "iid",
+    "alpha": 0.0
+  }
+}
