@@ -15,7 +15,10 @@ def run_case(
     random_state: int,
     bootstrap_mode: str,
     alpha: float,
-    block_size: int | None = None,):
+    block_size: int | None = None,
+    regime_k: int = 3,
+    regime_vol_window: int = 12,
+    regime_min_samples: int = 24,):
 
     print("\n" + "-" * 60)
     print(label)
@@ -25,8 +28,10 @@ def run_case(
         random_state=random_state,
         bootstrap_mode=bootstrap_mode,
         block_size=block_size,
-        alpha=alpha,
-    )
+        alpha=alpha, 
+        regime_k=regime_k,
+        regime_vol_window=regime_vol_window,
+        regime_min_samples=regime_min_samples,)
 
     terminal = paths[:, -1]
     survival = float(np.mean(terminal > 0.0))
@@ -49,11 +54,11 @@ def run_case(
     )
 
     out = results_dir / f"{label.replace(' ', '_').lower()}.json"
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
     return summary
-    
+
 def run_quick_eval(sim: MonteCarloSimulator, label: str, **kwargs) -> None:
     paths = sim.simulate_paths(**kwargs)
     terminal = paths[:, -1]
@@ -165,12 +170,15 @@ def main() -> None:
 
     run_case(
         sim,
-        label="Regime bootstrap (K-means k=3) (alpha=0)",
+        label="Regime bootstrap (K=3, vol=12)",
         results_dir=results_dir,
         n_paths=500,
         random_state=42,
         bootstrap_mode="regime",
-        alpha=0.0,)
+        alpha=0.0,
+        regime_k=3,
+        regime_vol_window=12,
+        regime_min_samples=24,)
 
 
 
