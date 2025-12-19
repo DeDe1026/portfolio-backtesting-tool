@@ -6,6 +6,9 @@ from src.data_loader import load_returns_data
 from src.models import MonteCarloSimulator, PortfolioConfig
 from src.evaluation import compute_survival_rate, summarize_terminal_wealth
 from src.optimization import OptimizationConfig, optimize_portfolio, export_optuna_trials_csv
+from src.experiments import CompareConfig, run_bootstrap_comparison
+from src.compare_plots import save_survival_bar, save_terminal_boxplot, save_drawdown_boxplot
+
 
 def run_case(
     sim,
@@ -94,6 +97,29 @@ def main() -> None:
         weights = {assets[0]: 1.0}
 
     sim = MonteCarloSimulator(returns_df, weights, base_config, periods_per_year=12)
+
+    compare_cfg = CompareConfig(
+        n_paths=2000,
+        random_state=42,
+        alpha=0.0,
+        block_size=3,              # keep small for dummy data; later set 12
+        regime_k=3,
+        regime_vol_window=12,
+        regime_min_samples=24,)
+
+    summary_df, outputs = run_bootstrap_comparison(sim, compare_cfg)
+
+    results_dir.mkdir(parents=True, exist_ok=True)
+    summary_csv = results_dir / "compare_bootstrap_summary.csv"
+    summary_df.to_csv(summary_csv)
+    print("\nSaved comparison summary to:", summary_csv)
+    print(summary_df)
+
+    save_survival_bar(summary_df, results_dir / "compare_survival_bar.png")
+    save_terminal_boxplot(outputs, results_dir / "compare_terminal_boxplot.png")
+    save_drawdown_boxplot(outputs, results_dir / "compare_drawdown_boxplot.png")
+    print("Saved comparison plots in:", results_dir)
+
 
     run_quick_eval(
         sim,
