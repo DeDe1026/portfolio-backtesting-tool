@@ -33,8 +33,7 @@ def main() -> None:
         initial_capital=1_000_000.0,
         withdrawal_rate=0.04,
         horizon_years=30,
-        rebalance_frequency="yearly",
-    )
+        rebalance_frequency="yearly",)
 
     # Baseline simulator (fixed weights)
     if len(assets) >= 2:
@@ -50,8 +49,7 @@ def main() -> None:
         n_paths=2000,
         random_state=42,
         bootstrap_mode="iid",
-        alpha=0.0,
-    )
+        alpha=0.0,)
 
     # --- Optimization ---
     opt_cfg = OptimizationConfig(
@@ -64,8 +62,7 @@ def main() -> None:
         alpha_min=0.0,
         alpha_max=0.30,
         bootstrap_mode="iid",
-        block_size=3,  # keep small for dummy dataset; later set to 12+ with real data
-    )
+        block_size=3,)  # keep small for dummy dataset; later set to 12+ with real data
 
     print("\nStarting optimization...")
     opt_result = optimize_portfolio(
@@ -73,8 +70,7 @@ def main() -> None:
         assets=assets,
         base_config=base_config,
         opt_config=opt_cfg,
-        periods_per_year=12,
-    )
+        periods_per_year=12,)
 
     # Extract study (so we can export trials)
     study = opt_result.pop("study")
@@ -108,8 +104,7 @@ def main() -> None:
         initial_capital=base_config.initial_capital,
         withdrawal_rate=best_wr,
         horizon_years=base_config.horizon_years,
-        rebalance_frequency=base_config.rebalance_frequency,
-    )
+        rebalance_frequency=base_config.rebalance_frequency,)
     best_sim = MonteCarloSimulator(returns_df, best_weights, best_cfg, periods_per_year=12)
 
     run_quick_eval(
@@ -119,8 +114,17 @@ def main() -> None:
         random_state=123,
         bootstrap_mode="iid",
         alpha=best_alpha,
-        block_size=opt_cfg.block_size,
-    )
+        block_size=opt_cfg.block_size,)
+
+    run_case(
+        sim,
+        label="Regime bootstrap (K-means k=3) (alpha=0)",
+        results_dir=results_dir,
+        n_paths=500,
+        random_state=42,
+        bootstrap_mode="regime",
+        alpha=0.0,)
+
 
 
 if __name__ == "__main__":
