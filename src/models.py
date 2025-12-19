@@ -1,3 +1,5 @@
+from src.regime import RegimeConfig, build_regime_features, fit_kmeans_regimes, compute_regime_transition_matrix, sample_regime_sequence
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -120,6 +122,53 @@ class MonteCarloSimulator:
 
         return np.array(indices[:n_periods], dtype=int)
 
+    def _sample_indices_regime(
+    self,
+    rng: np.random.Generator,
+    n_periods: int,
+    regime_k: int = 3,
+    vol_window: int = 12,
+    min_samples: int = 24,
+) -> np.ndarray:
+    """
+    Regime bootstrapping:
+      1) Cluster historical periods into regimes (K-means) using portfolio return + rolling vol.
+      2) Fit a Markov transition matrix over regimes.
+      3) Sample a regime path with the Markov chain.
+      4) For each period, sample a historical index from the selected regime.
+
+    Fallback: if not enough data for regimes, use iid indices.
+    """
+    cfg = RegimeConfig(k=regime_k, vol_window=vol_window, random_state=42, min_samples=min_samples)
+
+    feats = build_regime_features(self.returns, self.asset_weights, cfg)
+    labels, km, scaler = fit_kmeans_regimes(feats, cfg)
+
+    if km is None:
+        # Not enough data for stable regimes → fallback
+        return self._sample_indices_iid(rng, n_periods)
+
+    P = compute_regime_transition_matrix(labels, k=cfg.k)
+    regime_seq = sample_regime_sequence(rng, n_periods=n_periods, P=P)
+
+    # Map regime -> list of historical indices
+    buckets: list[list[int]] = [[] for _ in range(cfg.k)]
+    for i, r in enumerate(labels):
+        buckets[int(r)].append(i)
+
+    # If any regime bucket empty (can happen), fallback to iid
+    if any(len(b) == 0 for b in buckets):
+        return self._sample_indices_iid(rng, n_periods)
+
+    # For each period, sample a historical index from that regime
+    idx = np.zeros(n_periods, dtype=int)
+    for t in range(n_periods):
+        reg = int(regime_seq[t])
+        idx[t] = int(rng.choice(buckets[reg]))
+
+    return idx
+
+
     # -------------------------
     # Core simulation
     # -------------------------
@@ -181,6 +230,8 @@ class MonteCarloSimulator:
                 idx = self._sample_indices_iid(rng, n_periods)
             elif bootstrap_mode == "block":
                 idx = self._sample_indices_block(rng, n_periods, block_size=block_size)
+            elif bootstrap_mode == "regime":
+                idx = self._sample_indices_regime(rng, n_periods, regime_k=3, vol_window=12, min_samples=24,)
             else:
                 raise ValueError(f"Unknown bootstrap_mode: {bootstrap_mode}")
 
