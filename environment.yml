@@ -9,7 +9,7 @@ dependencies:
   - scikit-learn
   - scipy
   - jupyter
+  - Optuna
   - pip
   - pip:
-      - optuna
       - streamlit
