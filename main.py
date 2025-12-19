@@ -1,12 +1,59 @@
 from pathlib import Path
 import json
+import numpy as np
 
 from src.data_loader import load_returns_data
 from src.models import MonteCarloSimulator, PortfolioConfig
 from src.evaluation import compute_survival_rate, summarize_terminal_wealth
 from src.optimization import OptimizationConfig, optimize_portfolio, export_optuna_trials_csv
 
+def run_case(
+    sim,
+    label: str,
+    results_dir: Path,
+    n_paths: int,
+    random_state: int,
+    bootstrap_mode: str,
+    alpha: float,
+    block_size: int | None = None,):
 
+    print("\n" + "-" * 60)
+    print(label)
+
+    paths = sim.simulate_paths(
+        n_paths=n_paths,
+        random_state=random_state,
+        bootstrap_mode=bootstrap_mode,
+        block_size=block_size,
+        alpha=alpha,
+    )
+
+    terminal = paths[:, -1]
+    survival = float(np.mean(terminal > 0.0))
+
+    summary = {
+        "label": label,
+        "bootstrap_mode": bootstrap_mode,
+        "alpha": alpha,
+        "survival_rate": survival,
+        "median_terminal_wealth": float(np.median(terminal)),
+        "p10_terminal_wealth": float(np.percentile(terminal, 10)),
+        "p90_terminal_wealth": float(np.percentile(terminal, 90)),
+    }
+
+    print(f"Survival rate: {survival * 100:.1f}%")
+    print(f"Median terminal wealth: {summary['median_terminal_wealth']:.0f}")
+    print(
+        f"P10: {summary['p10_terminal_wealth']:.0f} | "
+        f"P90: {summary['p90_terminal_wealth']:.0f}"
+    )
+
+    out = results_dir / f"{label.replace(' ', '_').lower()}.json"
+    with open(out, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    return summary
+    
 def run_quick_eval(sim: MonteCarloSimulator, label: str, **kwargs) -> None:
     paths = sim.simulate_paths(**kwargs)
     terminal = paths[:, -1]
