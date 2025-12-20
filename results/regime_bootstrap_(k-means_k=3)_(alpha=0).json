@@ -1,0 +1,9 @@
+{
+  "label": "Regime bootstrap (K-means k=3) (alpha=0)",
+  "bootstrap_mode": "regime",
+  "alpha": 0.0,
+  "survival_rate": 1.0,
+  "median_terminal_wealth": 1945149.3661569995,
+  "p10_terminal_wealth": 1436762.3895785562,
+  "p90_terminal_wealth": 2535625.5923210243
+}
