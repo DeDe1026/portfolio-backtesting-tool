@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import numpy as np
+import argparse
 
 from src.data_loader import load_returns_data
 from src.models import MonteCarloSimulator, PortfolioConfig
@@ -74,8 +75,34 @@ def run_quick_eval(sim: MonteCarloSimulator, label: str, **kwargs) -> None:
     print(f"Median terminal wealth: {summary['median']:.0f}")
     print(f"P10: {summary['p10']:.0f} | P90: {summary['p90']:.0f}")
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Monte Carlo portfolio backtesting with multiple bootstrap modes")
+
+    parser.add_argument("--n-paths", type=int, default=2000, help="Number of Monte Carlo paths")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    parser.add_argument("--alpha", type=float, default=0.0, help="Withdrawal reduction factor")
+    parser.add_argument("--block-size", type=int, default=12, help="Block size for block bootstrap")
+
+    parser.add_argument("--regime-k", type=int, default=3, help="Number of regimes (K-means)")
+    parser.add_argument(
+        "--regime-vol-window",
+        type=int,
+        default=12,
+        help="Rolling volatility window for regime features",)
+    parser.add_argument(
+        "--regime-min-samples",
+        type=int,
+        default=24,
+        help="Minimum samples required to activate regime bootstrapping",)
+
+    return parser.parse_args()
+
+
 
 def main() -> None:
+    args = parse_args()
     project_root = Path(__file__).resolve().parent
     data_path = project_root / "data" / "raw" / "example_returns.csv"
     results_dir = project_root / "results"
@@ -99,13 +126,17 @@ def main() -> None:
     sim = MonteCarloSimulator(returns_df, weights, base_config, periods_per_year=12)
 
     compare_cfg = CompareConfig(
-        n_paths=2000,
-        random_state=42,
-        alpha=0.0,
-        block_size=3,              # keep small for dummy data; later set 12
-        regime_k=3,
-        regime_vol_window=12,
-        regime_min_samples=24,)
+        n_paths=args.n_paths,
+        random_state=args.seed,
+        alpha=args.alpha,
+        block_size=args.block_size,
+        regime_k=args.regime_k,
+        regime_vol_window=args.regime_vol_window,
+        regime_min_samples=args.regime_min_samples,)
+
+        
+        # keep small for dummy data; later set 12
+        
 
     summary_df, outputs = run_bootstrap_comparison(sim, compare_cfg)
 
