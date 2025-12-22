@@ -74,15 +74,39 @@ def run_bootstrap_comparison(sim, cfg: CompareConfig) -> tuple[pd.DataFrame, dic
     )
     outputs["iid"] = paths_iid
 
-    # Block
-    paths_block = sim.simulate_paths(
-        n_paths=cfg.n_paths,
-        random_state=cfg.random_state,
-        bootstrap_mode="block",
-        block_size=cfg.block_size,
-        alpha=cfg.alpha,
-    )
-    outputs["block"] = paths_block
+    # Block (robust): if too little data, shrink block_size to a valid value
+    try:
+        paths_block = sim.simulate_paths(
+            n_paths=cfg.n_paths,
+            random_state=cfg.random_state,
+            bootstrap_mode="block",
+            block_size=cfg.block_size,
+            alpha=cfg.alpha,
+        )
+        outputs["block"] = paths_block
+    except ValueError as e:
+        # Try fallback block sizes (down to 1) instead of crashing
+        fallback_sizes = [6, 3, 2, 1]
+        ok = False
+        for bs in fallback_sizes:
+            try:
+                paths_block = sim.simulate_paths(
+                    n_paths=cfg.n_paths,
+                    random_state=cfg.random_state,
+                    bootstrap_mode="block",
+                    block_size=bs,
+                    alpha=cfg.alpha,
+                )
+                outputs["block"] = paths_block
+                print(f"[WARN] Block bootstrap failed for block_size={cfg.block_size}. "
+                    f"Falling back to block_size={bs}.")
+                ok = True
+                break
+            except ValueError:
+                continue
+
+        if not ok:
+            print(f"[WARN] Block bootstrap skipped: {e}")
 
     # Regime
     paths_regime = sim.simulate_paths(
