@@ -111,13 +111,23 @@ def main() -> None:
     if args.build_data:
         build_monthly_returns_dataset(
         DatasetConfig(start=args.data_start, out_filename=Path(args.data_file).name))
+
+        print("Data build complete. Exiting because --build-data was set.")
+        return
     
     project_root = Path(__file__).resolve().parent
-    data_path = project_root / "data" / "raw" / "example_returns.csv"
+
+    # Load the dataset the user selected (default: data/raw/monthly_returns_native.csv)
+    data_path = (project_root / args.data_file).resolve()
+
     results_dir = project_root / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    print(f"\nLoading returns from: {data_path}")
     returns_df = load_returns_data(data_path)
+    print(f"Loaded returns shape: {returns_df.shape}")
+    print(f"Columns: {list(returns_df.columns)}")
+    print(returns_df.head())
     assets = list(returns_df.columns)
 
     base_config = PortfolioConfig(
