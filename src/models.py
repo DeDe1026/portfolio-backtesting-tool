@@ -102,24 +102,21 @@ class MonteCarloSimulator:
         pick random start positions, take block_size consecutive indices,
         repeat until reaching n_periods.
         """
-        if block_size <= 0:
-            raise ValueError("block_size must be >= 1.")
-        if block_size == 1:
-            return self._sample_indices_iid(rng, n_periods)
-
+        def _sample_indices_block(self, rng, n_periods, block_size: int):
         n_hist = len(self.returns)
-        if n_hist < block_size:
-            raise ValueError(f"Not enough historical data ({n_hist}) for block_size={block_size}.")
 
-        max_start = n_hist - block_size
-        indices: list[int] = []
+        if block_size is None or block_size <= 1:
+            return rng.integers(0, n_hist, size=n_periods)
 
+        # Clamp block size to available data
+        block_size = min(block_size, n_hist)
+
+        indices = []
         while len(indices) < n_periods:
-            start = int(rng.integers(0, max_start + 1))
-            block = list(range(start, start + block_size))
-            indices.extend(block)
+            start = rng.integers(0, n_hist - block_size + 1)
+            indices.extend(range(start, start + block_size))
 
-        return np.array(indices[:n_periods], dtype=int)
+        return np.array(indices[:n_periods])
 
     def _sample_indices_regime(self, rng: np.random.Generator, n_periods: int, regime_k: int = 3, vol_window: int = 12, min_samples: int = 24,) -> np.ndarray:
         """
