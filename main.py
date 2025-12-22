@@ -9,7 +9,7 @@ from src.evaluation import compute_survival_rate, summarize_terminal_wealth
 from src.optimization import OptimizationConfig, optimize_portfolio, export_optuna_trials_csv
 from src.experiments import CompareConfig, run_bootstrap_comparison
 from src.compare_plots import save_survival_bar, save_terminal_boxplot, save_drawdown_boxplot
-
+from src.build_dataset import DatasetConfig, build_monthly_returns_dataset
 
 def run_case(
     sim,
@@ -97,12 +97,21 @@ def parse_args():
         default=24,
         help="Minimum samples required to activate regime bootstrapping",)
 
+    parser.add_argument("--build-data", action="store_true", help="Download/build monthly dataset into data/raw/")
+    parser.add_argument("--data-start", type=str, default="1975-01-01", help="Start date for data download (YYYY-MM-DD)")
+    parser.add_argument("--data-file", type=str, default="data/raw/monthly_returns_native.csv", help="Path to monthly returns CSV")
+
+
     return parser.parse_args()
 
 
 
 def main() -> None:
     args = parse_args()
+    if args.build_data:
+        build_monthly_returns_dataset(
+        DatasetConfig(start=args.data_start, out_filename=Path(args.data_file).name))
+    
     project_root = Path(__file__).resolve().parent
     data_path = project_root / "data" / "raw" / "example_returns.csv"
     results_dir = project_root / "results"
