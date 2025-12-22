@@ -13,3 +13,6 @@ dependencies:
   - pip
   - pip:
       - streamlit
+      - yfinance
+      - pandas-datareader
+      
