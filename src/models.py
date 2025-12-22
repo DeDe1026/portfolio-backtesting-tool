@@ -6,6 +6,7 @@ from typing import Dict, Optional, Literal
 
 import numpy as np
 import pandas as pd
+import warnings
 
 
 BootstrapMode = Literal["iid", "block", "regime"]
@@ -96,13 +97,7 @@ class MonteCarloSimulator:
         n_hist = len(self.returns)
         return rng.integers(low=0, high=n_hist, size=n_periods)
 
-    def _sample_indices_block(self, rng: np.random.Generator, n_periods: int, block_size: int) -> np.ndarray:
-        """
-        Sample indices using block bootstrap:
-        pick random start positions, take block_size consecutive indices,
-        repeat until reaching n_periods.
-        """
-        def _sample_indices_block(self, rng, n_periods, block_size: int):
+    def _sample_indices_block(self, rng, n_periods, block_size: int):
         n_hist = len(self.returns)
 
         if block_size is None or block_size <= 1:
@@ -222,7 +217,18 @@ class MonteCarloSimulator:
             elif bootstrap_mode == "block":
                 idx = self._sample_indices_block(rng, n_periods, block_size=block_size)
             elif bootstrap_mode == "regime":
-                idx = self._sample_indices_regime(rng, n_periods, regime_k=regime_k, vol_window=regime_vol_window, min_samples=regime_min_samples,)
+                min_required = regime_min_samples + regime_vol_window
+
+                if len(self.returns) < min_required:
+                    warnings.warn(
+                        f"Insufficient data for regime bootstrap "
+                        f"(need ≥ {min_required} months, have {len(self.returns)}). "
+                        "Falling back to IID bootstrap."
+                    )
+                    idx = rng.integers(0, len(self.returns), size=n_periods)
+
+                else:
+                    idx = self._sample_indices_regime(rng, n_periods, regime_k=regime_k, vol_window=regime_vol_window, min_samples=regime_min_samples,)
             else:
                 raise ValueError(f"Unknown bootstrap_mode: {bootstrap_mode}")
 
