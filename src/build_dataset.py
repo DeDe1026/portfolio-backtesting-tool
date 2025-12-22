@@ -37,29 +37,52 @@ def build_monthly_returns_dataset(cfg: DatasetConfig) -> pd.DataFrame:
     fetch_cfg = FetchConfig(start=cfg.start, end=cfg.end)
 
     # --- Tickers (you can adjust later) ---
-    tickers: Dict[str, str] = {
-        "sp500_usd": "^GSPC",
-        "smi_chf": "^SSMI",          # if your yahoo locale needs different symbol, adjust here
-        "usdchf": "USDCHF=X",
-        "gold_usd": "XAUUSD=X",      # fallback could be "GC=F"
-        "us_gov_bonds_usd": "TLT",   # proxy (20y US Treasuries)
-        "ch_gov_bonds_chf": "CSBGC0.SW",  # proxy CHF Swiss govt bonds ETF (7-15y)
-    }
+    tickers: Dict[str, list[str]] = {
+    "sp500_usd": ["^GSPC"],
+    "smi_chf": ["^SSMI"],
+    "usdchf": ["USDCHF=X"],
+    # Gold: XAUUSD=X often fails; GC=F usually works
+    "gold_usd": ["GC=F", "XAUUSD=X"],
+    # US Treasuries proxy (20y or aggregated bonds)
+    "us_gov_bonds_usd": ["TLT", "BND"],
+    # Swiss gov bonds CHF proxy (if one fails, try another CHF bond ETF symbol you prefer, 0-3y or 7-15y)
+    "ch_gov_bonds_chf": ["CSBGC0.SW", "CSBGC3.SW"],}
+
 
     series = {}
-    for colname, ticker in tickers.items():
-        try:
-            r = fetch_monthly_returns_yf(ticker, fetch_cfg)
-            r.name = colname
-            series[colname] = r
-            print(f"[OK] {colname} ({ticker}) rows={len(r)}")
-        except Exception as e:
-            print(f"[WARN] Failed {colname} ({ticker}): {e}")
+    fail_log = {}
+
+    for colname, candidates in tickers.items():
+        ok = False
+        last_err = None
+
+        for ticker in candidates:
+            try:
+                r = fetch_monthly_returns_yf(ticker, fetch_cfg)
+                r.name = colname
+                series[colname] = r
+                print(f"[OK] {colname} ({ticker}) rows={len(r)}")
+                ok = True
+                break
+            except Exception as e:
+                last_err = str(e)
+
+        if not ok:
+            fail_log[colname] = {"candidates": candidates, "error": last_err}
+            print(f"[WARN] Failed {colname} ({candidates}): {last_err}")
+
+    if len(series) == 0:
+        raise RuntimeError(
+            "No series downloaded successfully. "
+            f"Failures: {fail_log}")
 
     df = pd.concat(series.values(), axis=1).dropna(how="any")
 
     out_path = cfg.out_dir / cfg.out_filename
-    df.to_csv(out_path, index=True)
+    df_out = df.copy()
+    df_out.index.name = "date"
+    df_out.reset_index().to_csv(out_path, index=False)
+
     print(f"\nSaved monthly dataset to: {out_path}")
     print(df.tail())
 
