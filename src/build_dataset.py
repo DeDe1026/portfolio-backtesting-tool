@@ -7,7 +7,7 @@ from typing import Dict, Optional
 import pandas as pd
 
 from src.data_fetcher import FetchConfig, fetch_monthly_returns_yf
-from src.inflation import load_cpi_index, compute_monthly_inflation
+from src.inflation import load_ch_inflation_rates
 
 
 
@@ -88,14 +88,17 @@ def build_monthly_returns_dataset(cfg: DatasetConfig) -> pd.DataFrame:
 
         # --- Swiss inflation (optional but recommended) ---
     try:
-        cpi = load_cpi_index()
-        infl = compute_monthly_inflation(cpi)
-
+        infl = load_ch_inflation_rates()
         df = df.join(infl, how="inner")
-        print("[OK] Swiss inflation added")
+        print(f"[OK] Added Swiss inflation series: {len(infl)} months")
 
     except FileNotFoundError:
-        print("[WARN] Swiss CPI file not found — inflation excluded")
+        print("[WARN] inflation CSV not found; proceeding without inflation series.")
+
+    df_out = df.copy()
+    df_out.index.name = "date"
+    df_out.reset_index().to_csv(out_path, index=False)
+
 
 
     return df
