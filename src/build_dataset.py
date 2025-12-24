@@ -86,9 +86,13 @@ def build_monthly_returns_dataset(cfg: DatasetConfig) -> pd.DataFrame:
     print(f"\nSaved monthly dataset to: {out_path}")
     print(df.tail())
 
+   
+
         # --- Swiss inflation (optional but recommended) ---
     try:
         infl = load_ch_inflation_rates()
+        print("[DEBUG] Inflation series head:")
+        print(infl.head())
         df = df.join(infl, how="inner")
         print(f"[OK] Added Swiss inflation series: {len(infl)} months")
 
