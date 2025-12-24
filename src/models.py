@@ -27,6 +27,8 @@ class PortfolioConfig:
     withdrawal_rate: float = 0.04
     horizon_years: int = 30
     rebalance_frequency: Literal["none", "yearly"] = "yearly"
+    inflation_aware_withdrawals: bool = False
+    inflation_col: str = "ch_inflation"
 
 
 class MonteCarloSimulator:
@@ -210,6 +212,13 @@ class MonteCarloSimulator:
         paths = np.zeros((n_paths, n_periods + 1), dtype=float)
         paths[:, 0] = self.config.initial_capital
 
+        if (self.config.inflation_aware_withdrawals
+            and self.config.inflation_col in self.returns.columns):
+            infl_values = self.returns[self.config.inflation_col].values
+
+        else:
+            infl_values = None
+
         for p in range(n_paths):
             # Sample indices
             if bootstrap_mode == "iid":
@@ -238,6 +247,9 @@ class MonteCarloSimulator:
             # Holdings per asset
             holdings = self.config.initial_capital * self.weights_vec.copy()
 
+            withdraw_amt = base_withdrawal  # will be inflation-adjusted over time (if enabled)
+
+
             for t in range(n_periods):
                 # 1) Apply asset returns to holdings
                 holdings *= (1.0 + R[t, :])
@@ -260,7 +272,7 @@ class MonteCarloSimulator:
                     port_r = -1.0
 
                 # 3) Withdraw
-                withdrawal = base_withdrawal
+                withdrawal = withdraw_amt
                 if port_r < 0 and alpha > 0:
                     withdrawal *= (1.0 - alpha)
 
@@ -273,6 +285,11 @@ class MonteCarloSimulator:
                 if floor_at_zero and total_after_withdraw < 0:
                     holdings[:] = 0.0
                     total_after_withdraw = 0.0
+
+                # 3b) Inflation-adjust next period's base withdrawal (keeps real spending constant)
+                if infl_values is not None:
+                    # use the inflation value corresponding to the sampled historical month
+                    withdraw_amt *= (1.0 + float(infl_values[idx[t]]))
 
                 # 4) Rebalance (yearly)
                 if self.config.rebalance_frequency == "yearly":

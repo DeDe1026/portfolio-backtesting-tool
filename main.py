@@ -100,6 +100,7 @@ def parse_args():
     parser.add_argument("--build-data", action="store_true", help="Download/build monthly dataset into data/raw/")
     parser.add_argument("--data-start", type=str, default="1975-01-01", help="Start date for data download (YYYY-MM-DD)")
     parser.add_argument("--data-file", type=str, default="data/raw/monthly_returns_native.csv", help="Path to monthly returns CSV")
+    parser.add_argument("--inflation-aware-withdrawals", action="store_true", help="Increase withdrawals by realized inflation (keeps spending power constant)")
 
 
     return parser.parse_args()
@@ -134,7 +135,8 @@ def main() -> None:
         initial_capital=1_000_000.0,
         withdrawal_rate=0.04,
         horizon_years=30,
-        rebalance_frequency="yearly",)
+        rebalance_frequency="yearly",
+        inflation_aware_withdrawals=args.inflation_aware_withdrawals)
 
     # Baseline simulator (fixed weights)
     if len(assets) >= 2:
