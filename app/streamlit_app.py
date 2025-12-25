@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+# --- Make sure project root is on PYTHONPATH so `import src...` works ---
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -185,6 +192,9 @@ def main():
 
     weights = normalize_weights(raw_weights)
 
+    st.caption(f"Weight sum check: {sum(weights.values()):.6f} (should be 1.0)")
+
+
     w_df = pd.DataFrame(
         {"asset": list(weights.keys()), "weight": list(weights.values())}
     ).sort_values("weight", ascending=False)
@@ -198,14 +208,14 @@ def main():
     run_btn = st.button("Run Monte Carlo", type="primary")
 
     if run_btn:
-    cfg = PortfolioConfig(
-        initial_capital=float(initial_capital),
-        withdrawal_rate=float(withdrawal_rate),
-        horizon_years=int(horizon_years),
-        rebalance_frequency="yearly",
-        inflation_aware_withdrawals=bool(inflation_toggle),
-        inflation_col="ch_inflation",
-    )
+        cfg = PortfolioConfig(
+            initial_capital=float(initial_capital),
+            withdrawal_rate=float(withdrawal_rate),
+            horizon_years=int(horizon_years),
+            rebalance_frequency="yearly",
+            inflation_aware_withdrawals=bool(inflation_toggle),
+            inflation_col="ch_inflation",
+        )
 
     sim = MonteCarloSimulator(
         returns=returns_df,
