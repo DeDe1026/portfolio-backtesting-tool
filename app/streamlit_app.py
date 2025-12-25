@@ -84,7 +84,7 @@ def main():
         st.stop()
 
     # Identify investable assets: exclude inflation col if present
-    inflation_col = "ch_inflation_mom"
+    inflation_col = "ch_inflation"
     assets = [c for c in returns_df.columns if c != inflation_col]
 
     if len(assets) == 0:
@@ -209,10 +209,9 @@ def main():
 
     sim = MonteCarloSimulator(
         returns=returns_df,
-        weights=weights,
+        asset_weights=weights,
         config=cfg,
         periods_per_year=12,
-        assets=assets,
     )
 
     results = []

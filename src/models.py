@@ -57,6 +57,11 @@ class MonteCarloSimulator:
 
         self._validate_inputs()
 
+        if self.config.inflation_col in self.asset_weights:
+            raise ValueError(
+                f"Inflation column '{self.config.inflation_col}' must NOT be included in asset_weights.")
+
+
         # Keep asset order stable for matrix operations
         self.assets = list(self.asset_weights.keys())
         self.weights_vec = np.array([self.asset_weights[a] for a in self.assets], dtype=float)
