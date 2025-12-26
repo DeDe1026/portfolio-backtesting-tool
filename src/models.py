@@ -167,14 +167,16 @@ class MonteCarloSimulator:
     def simulate_paths(
         self,
         n_paths: int = 1000,
-        random_state: Optional[int] = None,
+        random_state: int = 42,
         bootstrap_mode: BootstrapMode = "iid",
         block_size: int = 12,
         alpha: float = 0.0,
         floor_at_zero: bool = True,
         regime_k: int = 3,
         regime_vol_window: int = 12,
-        regime_min_samples: int = 24,) -> np.ndarray:
+        regime_min_samples: int = 24,
+        return_withdrawals: bool = False,
+        return_diagnostics: bool = False,) -> np.ndarray | tuple[np.ndarray, dict[str, np.ndarray]]:
         """
         Simulate portfolio wealth paths.
 
@@ -216,6 +218,19 @@ class MonteCarloSimulator:
 
         paths = np.zeros((n_paths, n_periods + 1), dtype=float)
         paths[:, 0] = self.config.initial_capital
+
+        # Diagnostics (optional)
+        if return_diagnostics:
+            diag_withdrawals = np.zeros((n_paths, n_periods), dtype=float)
+            diag_neg_month = np.zeros((n_paths, n_periods), dtype=bool)
+            diag_port_r = np.zeros((n_paths, n_periods), dtype=float)
+        else:
+            diag_withdrawals = None
+            diag_neg_month = None
+            diag_port_r = None
+
+
+        withdrawals = np.zeros((n_paths, n_periods), dtype=float) 
 
         if (self.config.inflation_aware_withdrawals
             and self.config.inflation_col in self.returns.columns):
@@ -276,15 +291,27 @@ class MonteCarloSimulator:
                 else:
                     port_r = -1.0
 
+                if return_diagnostics:
+                    diag_port_r[p, t] = port_r
+                    diag_neg_month[p, t] = (port_r < 0.0)
+
+
                 # 3) Withdraw
                 withdrawal = withdraw_amt
                 if port_r < 0 and alpha > 0:
                     withdrawal *= (1.0 - alpha)
 
+                if return_diagnostics:
+                    diag_withdrawals[p, t] = float(withdrawal)
+
+                withdrawal_paid = 0.0
                 # Withdraw proportionally from all holdings
                 if withdrawal > 0 and total_before_withdraw > 0:
                     withdraw_frac = min(1.0, withdrawal / total_before_withdraw)
                     holdings *= (1.0 - withdraw_frac)
+                    withdrawal_paid = withdrawal  
+
+                withdrawals[p, t] = withdrawal_paid
 
                 total_after_withdraw = float(holdings.sum())
                 if floor_at_zero and total_after_withdraw < 0:
@@ -304,5 +331,18 @@ class MonteCarloSimulator:
 
                 paths[p, t + 1] = total_after_withdraw
 
-        return paths
+        if return_withdrawals:
+            return paths, withdrawals
+
+        if not return_diagnostics:
+            return paths
+
+        diagnostics = {
+            "withdrawals": diag_withdrawals,
+            "neg_months": diag_neg_month,
+            "portfolio_returns": diag_port_r,
+        }
+        return paths, diagnostics
+
+        
 
