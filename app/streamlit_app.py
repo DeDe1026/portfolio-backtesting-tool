@@ -28,6 +28,35 @@ def normalize_weights(raw: dict[str, float]) -> dict[str, float]:
         return {k: 1.0 / n for k in raw} if n > 0 else {}
     return {k: float(v) / total for k, v in raw.items()}
 
+def apply_fx_conversion_to_chf(
+    returns_df: pd.DataFrame,
+    fx_col: str = "usdchf",
+    usd_asset_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Convert USD-denominated asset returns into CHF returns using USDCHF monthly returns:
+        r_chf = (1+r_usd_asset)*(1+r_fx) - 1
+    Assumes fx_col is monthly % return of USDCHF (CHF per USD).
+
+    Returns a COPY with USD assets converted. fx_col is kept (non-investable).
+    """
+    df = returns_df.copy()
+
+    if fx_col not in df.columns:
+        return df
+
+    fx = df[fx_col].astype(float)
+
+    if usd_asset_cols is None:
+        # sensible defaults based on your column names
+        usd_asset_cols = [c for c in df.columns if c.endswith("_usd")]
+
+    for c in usd_asset_cols:
+        if c not in df.columns:
+            continue
+        df[c] = (1.0 + df[c].astype(float)) * (1.0 + fx) - 1.0
+
+    return df
 
 def run_one_mode(
     sim: MonteCarloSimulator,
@@ -40,7 +69,7 @@ def run_one_mode(
     regime_vol_window: int,
     regime_min_samples: int,
 ) -> dict:
-    paths = sim.simulate_paths(
+    out = sim.simulate_paths(
         n_paths=n_paths,
         random_state=seed,
         bootstrap_mode=mode,
@@ -49,19 +78,52 @@ def run_one_mode(
         regime_k=regime_k,
         regime_vol_window=regime_vol_window,
         regime_min_samples=regime_min_samples,
+        return_diagnostics=True,
     )
+    paths, diag = out  # <-- because return_diagnostics=True
+
     terminal = paths[:, -1]
     survival = float(np.mean(terminal > 0.0))
+    failed = int(np.sum(terminal <= 0.0))
+
+    neg_months = diag["neg_months"]          # shape (n_paths, n_periods)
+    withdrawals = diag["withdrawals"]        # shape (n_paths, n_periods)
+
+    neg_count_per_path = neg_months.sum(axis=1)
+    total_months = neg_months.shape[1]
+
     return {
         "mode": mode,
         "paths": paths,
         "terminal": terminal,
         "survival": survival,
+        "failed": failed,
+        "n_paths": int(n_paths),
+        "neg_months_total": int(neg_months.sum()),
+        "neg_months_per_path_median": float(np.median(neg_count_per_path)),
+        "neg_months_total_months": int(total_months),
+        "withdrawals": withdrawals,
+        "neg_months": neg_months,
         "median_terminal": float(np.median(terminal)),
         "p10_terminal": float(np.percentile(terminal, 10)),
         "p90_terminal": float(np.percentile(terminal, 90)),
     }
 
+def pick_paths_by_terminal_percentiles(paths: np.ndarray, percentiles: list[int]) -> np.ndarray:
+    terminal = paths[:, -1]
+    order = np.argsort(terminal)
+    n = len(order)
+    picked = []
+    for p in percentiles:
+        k = int(round((p / 100.0) * (n - 1)))
+        picked.append(paths[order[k], :])
+    return np.vstack(picked)
+
+def paths_df_year_index(paths: np.ndarray, periods_per_year: int = 12) -> pd.DataFrame:
+    years = np.arange(paths.shape[1]) / periods_per_year
+    df = pd.DataFrame(paths.T, index=years)
+    df.index.name = "Years"
+    return df
 
 def median_path_cagr_and_vol(paths: np.ndarray, periods_per_year: int = 12) -> tuple[float, float]:
     """
@@ -147,15 +209,28 @@ def main():
         st.error(f"Could not load returns data: {e}")
         st.stop()
 
-    # assets exclude inflation
-    assets = [c for c in returns_df.columns if c != inflation_col]
+    fx_col = "usdchf"
+
+    # Let user choose which columns are USD-denominated
+    default_usd_assets = [c for c in returns_df.columns if c.endswith("_usd")]
+    usd_assets = st.sidebar.multiselect(
+        "USD-denominated assets (will be converted to CHF using usdchf)",
+        options=[c for c in returns_df.columns if c not in [fx_col, "ch_inflation"]],
+        default=default_usd_assets,
+    )
+
+    # Apply conversion
+    returns_df_fx = apply_fx_conversion_to_chf(returns_df, fx_col=fx_col, usd_asset_cols=usd_assets)
+
+    # Define investable assets: exclude inflation + fx (usdchf)
+    assets = [c for c in returns_df_fx.columns if c not in [inflation_col, fx_col]]
+
     if len(assets) == 0:
         st.error("No investable assets found (all columns are treated as inflation or dataset is empty).")
         st.stop()
 
-    st.subheader("Dataset preview")
-    st.write(f"Columns: {returns_df.columns.tolist()}")
-    st.dataframe(returns_df.tail(12))
+    st.write(f"Columns (fx-adjusted): {returns_df_fx.columns.tolist()}")
+    st.dataframe(returns_df_fx.tail(12))
 
     # ---------------- User inputs ----------------
     st.subheader("User Inputs (CHF)")
@@ -293,7 +368,7 @@ def main():
 
     with st.spinner("Running Bayesian optimization (Optuna/TPE)..."):
         opt_result = optimize_portfolio(
-            returns_df=returns_df,
+            returns_df=returns_df_fx,
             assets=assets,
             base_config=base_cfg,
             opt_config=opt_cfg,
@@ -329,7 +404,7 @@ def main():
     )
 
     sim_best = MonteCarloSimulator(
-        returns=returns_df,
+        returns=returns_df_fx,
         asset_weights=best_weights,
         config=cfg_best,
         periods_per_year=12,
@@ -353,20 +428,28 @@ def main():
             )
 
     comp = pd.DataFrame([{
-        "Bootstrap": r["mode"].upper(),
-        "Survival": r["survival"],
-        "Median terminal (CHF)": r["median_terminal"],
-        "P10 terminal (CHF)": r["p10_terminal"],
-        "P90 terminal (CHF)": r["p90_terminal"],
-    } for r in results])
+    "Bootstrap": r["mode"].upper(),
+    "Survival": r["survival"],
+    "Failed (count)": r["failed"],
+    "Failed (%)": r["failed"] / r["n_paths"],
+    "Neg months (total)": r["neg_months_total"],
+    "Neg months / path (median)": r["neg_months_per_path_median"],
+    "Total months": r["neg_months_total_months"],
+    "Median terminal (CHF)": r["median_terminal"],
+    "P10 terminal (CHF)": r["p10_terminal"],
+    "P90 terminal (CHF)": r["p90_terminal"],
+} for r in results])
+
 
     st.subheader("Bootstrap comparison (optimized params applied)")
     st.dataframe(comp.style.format({
-        "Survival": "{:.1%}",
-        "Median terminal (CHF)": "CHF {:,.0f}",
-        "P10 terminal (CHF)": "CHF {:,.0f}",
-        "P90 terminal (CHF)": "CHF {:,.0f}",
-    }))
+    "Survival": "{:.1%}",
+    "Failed (%)": "{:.1%}",
+    "Neg months / path (median)": "{:.0f}",
+    "Median terminal (CHF)": "CHF {:,.0f}",
+    "P10 terminal (CHF)": "CHF {:,.0f}",
+    "P90 terminal (CHF)": "CHF {:,.0f}",
+}))
 
     # ---------------- Median-path return/vol ----------------
     st.subheader("Median-path performance (net of withdrawals)")
@@ -387,15 +470,27 @@ def main():
     }))
 
     # ---------------- Plots: X axis in years ----------------
-    st.subheader("Sample paths (first 50) with X-axis in years")
+    st.subheader("Representative paths (11 percentiles) with X-axis in years")
+
+    percentiles = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99]
 
     for r in results:
         st.markdown(f"**{r['mode'].upper()}**")
-        paths = r["paths"][:50, :]
-        x_years = np.arange(paths.shape[1]) / 12.0
-        df_plot = pd.DataFrame(paths.T, index=x_years)
-        df_plot.index.name = "Years"
+        rep = pick_paths_by_terminal_percentiles(r["paths"], percentiles)
+        df_plot = paths_df_year_index(rep, periods_per_year=12)
+        df_plot.columns = [f"P{p}" for p in percentiles]
         st.line_chart(df_plot)
+
+    st.subheader("Median portfolio value over time (all bootstrap modes)")
+
+    median_df = pd.DataFrame(index=np.arange(results[0]["paths"].shape[1]) / 12.0)
+    median_df.index.name = "Years"
+
+    for r in results:
+        median_df[r["mode"].upper()] = np.median(r["paths"], axis=0)
+
+    st.line_chart(median_df)
+
 
     # ---------------- Helpful note about "average yearly withdrawal" ----------------
     st.info(
