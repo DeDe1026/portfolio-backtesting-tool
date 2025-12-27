@@ -101,6 +101,7 @@ def run_one_mode(
         "n_paths": int(n_paths),
         "neg_months_total": int(neg_months.sum()),
         "neg_months_per_path_median": float(np.median(neg_count_per_path)),
+        "Neg_months_per_path_mean": float(np.mean(neg_count_per_path)),
         "neg_months_total_months": int(total_months),
         "withdrawals": withdrawals,
         "neg_months": neg_months,
@@ -154,6 +155,30 @@ def pie_chart(weights: dict[str, float], title: str):
     ax.set_title(title)
     st.pyplot(fig)
 
+def build_comp_rows(results_list, scenario_label: str):
+    rows = []
+    for r in results_list:
+        neg = r["neg_months"]  # (n_paths, n_periods)
+        neg_per_path = neg.sum(axis=1)
+
+        rows.append({
+            "Scenario": scenario_label,
+            "Bootstrap": r["mode"].upper(),
+            "Survival": float(r["survival"]),
+            "Failed (count)": float(r["failed"]),
+            "Failed (%)": float(r["failed"] / r["n_paths"]),
+            "Neg months / path (median)": float(np.median(neg_per_path)),
+            "Neg months / path (mean)": float(np.mean(neg_per_path)),
+            "Total months": float(neg.shape[1]),
+            "Median terminal (CHF)": float(r["median_terminal"]),
+            "P10 terminal (CHF)": float(r["p10_terminal"]),
+            "P90 terminal (CHF)": float(r["p90_terminal"]),
+        })
+    return rows
+
+
+def median_path_series(paths: np.ndarray) -> np.ndarray:
+    return np.median(paths, axis=0)
 
 def main():
     st.title("Swiss Portfolio Backtesting Tool (Monte Carlo + Bootstrap + Bayesian Optimization)")
@@ -427,53 +452,125 @@ def main():
                 )
             )
 
-    comp = pd.DataFrame([{
-    "Bootstrap": r["mode"].upper(),
-    "Survival": r["survival"],
-    "Failed (count)": r["failed"],
-    "Failed (%)": r["failed"] / r["n_paths"],
-    "Neg months (total)": r["neg_months_total"],
-    "Neg months / path (median)": r["neg_months_per_path_median"],
-    "Total months": r["neg_months_total_months"],
-    "Median terminal (CHF)": r["median_terminal"],
-    "P10 terminal (CHF)": r["p10_terminal"],
-    "P90 terminal (CHF)": r["p90_terminal"],
-} for r in results])
+    # ---------------- BASIC (no optimization) simulation ----------------
+    alpha_basic = 0.0
+    if w_pref > 0:
+        alpha_basic = max(0.0, min(0.999, 1.0 - (w_floor / w_pref)))
 
+    cfg_basic = PortfolioConfig(
+        initial_capital=float(initial_capital),
+        withdrawal_rate=float(withdrawal_rate_pref),
+        horizon_years=int(horizon_years),
+        rebalance_frequency="yearly",
+        inflation_aware_withdrawals=bool(inflation_toggle),
+        inflation_col=str(inflation_col),
+    )
 
-    st.subheader("Bootstrap comparison (optimized params applied)")
-    st.dataframe(comp.style.format({
-    "Survival": "{:.1%}",
-    "Failed (%)": "{:.1%}",
-    "Neg months / path (median)": "{:.0f}",
-    "Median terminal (CHF)": "CHF {:,.0f}",
-    "P10 terminal (CHF)": "CHF {:,.0f}",
-    "P90 terminal (CHF)": "CHF {:,.0f}",
-}))
+    sim_basic = MonteCarloSimulator(
+        returns=returns_df_fx,
+        asset_weights=weights_guess,
+        config=cfg_basic,
+        periods_per_year=12,
+    )
+
+    with st.spinner("Running BASIC simulations (IID, Block, Regime) for comparison..."):
+        basic_results = []
+        for mode in ["iid", "block", "regime"]:
+            basic_results.append(
+                run_one_mode(
+                    sim=sim_basic,
+                    mode=mode,
+                    n_paths=int(n_paths),
+                    seed=int(seed),
+                    alpha=float(alpha_basic),
+                    block_size=int(block_size),
+                    regime_k=int(regime_k),
+                    regime_vol_window=int(regime_vol_window),
+                    regime_min_samples=int(regime_min_samples),
+                )
+            )
+
+    st.subheader("Scenario definitions")
+
+    st.markdown(
+        f"""
+    **BASIC:** user weights, preferred withdrawal CHF {w_pref:,.2f} / month, and in negative months withdrawal becomes floor CHF {w_floor:,.2f}  
+    → implemented as **alpha_basic = {alpha_basic:.2%}**
+
+    **OPTIMIZED:** Bayesian optimization chooses weights + alpha + withdrawal rate (per selected optimization mode).
+    """
+    )
+
+    # ---------------- Bootstrap comparison table ----------------
+    comp = pd.DataFrame(
+        build_comp_rows(basic_results, "BASIC (user weights, floor rule)") +
+        build_comp_rows(results, "OPTIMIZED (Bayesian)")
+    )
+
+    st.subheader("Bootstrap comparison (BASIC vs OPTIMIZED)")
+    st.dataframe(
+        comp.style.format({
+            "Survival": "{:.2%}",
+            "Failed (%)": "{:.2%}",
+            "Failed (count)": "{:,.2f}",
+            "Neg months / path (median)": "{:,.2f}",
+            "Neg months / path (mean)": "{:,.2f}",
+            "Total months": "{:,.2f}",
+            "Median terminal (CHF)": "CHF {:,.2f}",
+            "P10 terminal (CHF)": "CHF {:,.2f}",
+            "P90 terminal (CHF)": "CHF {:,.2f}",
+        })
+    )
+
 
     # ---------------- Median-path return/vol ----------------
     st.subheader("Median-path performance (net of withdrawals)")
 
     perf_rows = []
-    for r in results:
-        cagr, vol = median_path_cagr_and_vol(r["paths"], periods_per_year=12)
-        perf_rows.append({
-            "Bootstrap": r["mode"].upper(),
-            "Median-path CAGR": cagr,
-            "Median-path Vol (ann.)": vol,
-        })
+    for scenario_label, res_list in [
+        ("BASIC (user)", basic_results),
+        ("OPTIMIZED", results),
+    ]:
+        for r in res_list:
+            cagr, vol = median_path_cagr_and_vol(r["paths"], periods_per_year=12)
+            perf_rows.append({
+                "Scenario": scenario_label,
+                "Bootstrap": r["mode"].upper(),
+                "Median-path CAGR": float(cagr),
+                "Median-path Vol (ann.)": float(vol),
+            })
 
     perf = pd.DataFrame(perf_rows)
-    st.dataframe(perf.style.format({
-        "Median-path CAGR": "{:.2%}",
-        "Median-path Vol (ann.)": "{:.2%}",
-    }))
+
+    st.dataframe(
+        perf.style.format({
+            "Median-path CAGR": "{:.2%}",
+            "Median-path Vol (ann.)": "{:.2%}",
+        })
+    )
+
+    perf_rows = []
+    for scenario_label, res_list in [
+     ("BASIC (user)", basic_results),
+        ("OPTIMIZED", results),
+    ]:
+        for r in res_list:
+            cagr, vol = median_path_cagr_and_vol(r["paths"], periods_per_year=12)
+            perf_rows.append({
+                "Scenario": scenario_label,
+                "Bootstrap": r["mode"].upper(),
+                "Median-path CAGR": cagr,
+                "Median-path Vol (ann.)": vol,
+            })
+
+    perf = pd.DataFrame(perf_rows)
 
     # ---------------- Plots: X axis in years ----------------
     st.subheader("Representative paths (11 percentiles) with X-axis in years")
 
     percentiles = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99]
 
+    # OPTIMIZED
     for r in results:
         st.markdown(f"**{r['mode'].upper()}**")
         rep = pick_paths_by_terminal_percentiles(r["paths"], percentiles)
@@ -481,13 +578,24 @@ def main():
         df_plot.columns = [f"P{p}" for p in percentiles]
         st.line_chart(df_plot)
 
-    st.subheader("Median portfolio value over time (all bootstrap modes)")
+    # BASIC
+    for r in basic_results:
+        st.markdown(f"**{r['mode'].upper()}**")
+        rep = pick_paths_by_terminal_percentiles(r["paths"], percentiles)
+        df_plot = paths_df_year_index(rep, periods_per_year=12)
+        df_plot.columns = [f"P{p}" for p in percentiles]
+        st.line_chart(df_plot)
 
-    median_df = pd.DataFrame(index=np.arange(results[0]["paths"].shape[1]) / 12.0)
+    st.subheader("Median path comparison of all bootstrap modes for OPTIMIZED")
+
+    years = np.arange(results[0]["paths"].shape[1]) / 12.0
+    median_df = pd.DataFrame(index=years)
     median_df.index.name = "Years"
 
+
+    # OPTIMIZED
     for r in results:
-        median_df[r["mode"].upper()] = np.median(r["paths"], axis=0)
+        median_df[f"OPT_{r['mode'].upper()}"] = median_path_series(r["paths"])
 
     st.line_chart(median_df)
 
