@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import altair as alt
+
 
 from src.data_loader import load_returns_data
 from src.models import MonteCarloSimulator, PortfolioConfig
@@ -126,16 +128,20 @@ def paths_df_year_index(paths: np.ndarray, periods_per_year: int = 12) -> pd.Dat
     df.index.name = "Years"
     return df
 
-def median_path_cagr_and_vol(paths: np.ndarray, periods_per_year: int = 12) -> tuple[float, float]:
+def median_path_cagr_vol_mdd(paths: np.ndarray, periods_per_year: int = 12) -> tuple[float, float, float]:
     """
     Pick the path whose terminal wealth is closest to the median terminal wealth.
     Compute:
       - CAGR of wealth series (net of withdrawals, because withdrawals already applied)
       - annualized volatility of monthly wealth returns
+      - max drawdown of wealth series
+    0..1 as fraction.
     """
+    
     terminal = paths[:, -1]
     med = np.median(terminal)
     i = int(np.argmin(np.abs(terminal - med)))
+
     w = paths[i, :]
     rets = w[1:] / np.maximum(w[:-1], 1e-12) - 1.0
 
@@ -146,8 +152,35 @@ def median_path_cagr_and_vol(paths: np.ndarray, periods_per_year: int = 12) -> t
         cagr = float((w[-1] / w[0]) ** (1.0 / max(years, 1e-12)) - 1.0)
 
     vol = float(np.std(rets, ddof=1) * np.sqrt(periods_per_year)) if len(rets) > 2 else float("nan")
-    return cagr, vol
+    mdd = max_drawdown(w)
+    return cagr, vol, mdd
 
+def altair_lines_from_wide(df: pd.DataFrame, title: str, y_title: str = "CHF"):
+    """
+    df: index is Years; columns are series names; values are CHF wealth.
+    Produces an Altair line chart with formatted tooltips.
+    """
+    plot_df = df.reset_index().melt(id_vars=[df.index.name or "index"], var_name="Series", value_name="Value")
+    x_col = df.index.name or "index"
+    plot_df = plot_df.rename(columns={x_col: "Years"})
+
+    chart = (
+        alt.Chart(plot_df)
+        .mark_line()
+        .encode(
+            x=alt.X("Years:Q", title="Years"),
+            y=alt.Y("Value:Q", title=y_title, axis=alt.Axis(format=",.0f")),
+            color=alt.Color("Series:N"),
+            tooltip=[
+                alt.Tooltip("Years:Q", format=",.2f"),
+                alt.Tooltip("Series:N"),
+                alt.Tooltip("Value:Q", format=",.2f"),
+            ],
+        )
+        .properties(title=title, height=420)
+        .interactive()
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 def pie_chart(weights: dict[str, float], title: str):
     fig, ax = plt.subplots()
@@ -176,6 +209,15 @@ def build_comp_rows(results_list, scenario_label: str):
         })
     return rows
 
+def max_drawdown(series: np.ndarray) -> float:
+    """
+    Max drawdown of a wealth series (0..1 as fraction).
+    """
+    x = np.asarray(series, dtype=float)
+    x = np.maximum(x, 1e-12)
+    peak = np.maximum.accumulate(x)
+    dd = 1.0 - (x / peak)
+    return float(np.max(dd))
 
 def median_path_series(paths: np.ndarray) -> np.ndarray:
     return np.median(paths, axis=0)
@@ -523,7 +565,7 @@ def main():
     )
 
 
-    # ---------------- Median-path return/vol ----------------
+    # ---------------- Median-path return/vol/max drawdown ----------------
     st.subheader("Median-path performance (net of withdrawals)")
 
     perf_rows = []
@@ -532,13 +574,15 @@ def main():
         ("OPTIMIZED", results),
     ]:
         for r in res_list:
-            cagr, vol = median_path_cagr_and_vol(r["paths"], periods_per_year=12)
+            cagr, vol, mdd = median_path_cagr_vol_mdd(r["paths"], periods_per_year=12)
             perf_rows.append({
                 "Scenario": scenario_label,
                 "Bootstrap": r["mode"].upper(),
                 "Median-path CAGR": float(cagr),
                 "Median-path Vol (ann.)": float(vol),
+                "Median-path Max Drawdown": float(mdd),
             })
+
 
     perf = pd.DataFrame(perf_rows)
 
@@ -546,45 +590,28 @@ def main():
         perf.style.format({
             "Median-path CAGR": "{:.2%}",
             "Median-path Vol (ann.)": "{:.2%}",
+            "Median-path Max Drawdown": "{:.2%}",
         })
     )
 
-    perf_rows = []
-    for scenario_label, res_list in [
-     ("BASIC (user)", basic_results),
-        ("OPTIMIZED", results),
-    ]:
-        for r in res_list:
-            cagr, vol = median_path_cagr_and_vol(r["paths"], periods_per_year=12)
-            perf_rows.append({
-                "Scenario": scenario_label,
-                "Bootstrap": r["mode"].upper(),
-                "Median-path CAGR": cagr,
-                "Median-path Vol (ann.)": vol,
-            })
-
-    perf = pd.DataFrame(perf_rows)
-
     # ---------------- Plots: X axis in years ----------------
-    st.subheader("Representative paths (11 percentiles) with X-axis in years")
+    st.subheader("Representative paths (11 percentiles) — BASIC and OPTIMIZED")
 
     percentiles = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99]
 
-    # OPTIMIZED
-    for r in results:
-        st.markdown(f"**{r['mode'].upper()}**")
-        rep = pick_paths_by_terminal_percentiles(r["paths"], percentiles)
-        df_plot = paths_df_year_index(rep, periods_per_year=12)
-        df_plot.columns = [f"P{p}" for p in percentiles]
-        st.line_chart(df_plot)
+    for scenario_label, res_list in [
+        ("BASIC", basic_results),
+        ("OPTIMIZED", results),
+    ]:
+        st.markdown(f"### {scenario_label}")
+        for r in res_list:
+            st.markdown(f"**{r['mode'].upper()}**")
+            rep = pick_paths_by_terminal_percentiles(r["paths"], percentiles)
+            df_plot = paths_df_year_index(rep, periods_per_year=12)
+            df_plot.columns = [f"P{p}" for p in percentiles]
 
-    # BASIC
-    for r in basic_results:
-        st.markdown(f"**{r['mode'].upper()}**")
-        rep = pick_paths_by_terminal_percentiles(r["paths"], percentiles)
-        df_plot = paths_df_year_index(rep, periods_per_year=12)
-        df_plot.columns = [f"P{p}" for p in percentiles]
-        st.line_chart(df_plot)
+            # Use Altair so tooltips are nicely formatted
+            altair_lines_from_wide(df_plot, title=f"{scenario_label} — {r['mode'].upper()} representative paths")
 
     st.subheader("Median path comparison of all bootstrap modes for OPTIMIZED")
 
@@ -597,7 +624,8 @@ def main():
     for r in results:
         median_df[f"OPT_{r['mode'].upper()}"] = median_path_series(r["paths"])
 
-    st.line_chart(median_df)
+    altair_lines_from_wide(median_df, "Median path comparison of all bootstrap modes for OPTIMIZED")
+
 
 
     # ---------------- Helpful note about "average yearly withdrawal" ----------------
