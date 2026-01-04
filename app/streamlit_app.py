@@ -14,146 +14,20 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import altair as alt
 
+from src.pipeline import (
+    normalize_weights,
+    apply_fx_conversion_to_chf,
+    run_basic_and_optimized,
+    pick_paths_by_terminal_percentiles,
+    median_path_series,
+)
+
 
 from src.data_loader import load_returns_data
-from src.models import MonteCarloSimulator, PortfolioConfig
-from src.optimization import OptimizationConfig, optimize_portfolio
-
+from src.optimization import OptimizationConfig
 
 st.set_page_config(page_title="Swiss Portfolio Backtesting Tool", layout="wide")
 
-
-def normalize_weights(raw: dict[str, float]) -> dict[str, float]:
-    total = sum(max(0.0, float(v)) for v in raw.values())
-    if total <= 0:
-        n = len(raw)
-        return {k: 1.0 / n for k in raw} if n > 0 else {}
-    return {k: float(v) / total for k, v in raw.items()}
-
-def apply_fx_conversion_to_chf(
-    returns_df: pd.DataFrame,
-    fx_col: str = "usdchf",
-    usd_asset_cols: list[str] | None = None,
-) -> pd.DataFrame:
-    """
-    Convert USD-denominated asset returns into CHF returns using USDCHF monthly returns:
-        r_chf = (1+r_usd_asset)*(1+r_fx) - 1
-    Assumes fx_col is monthly % return of USDCHF (CHF per USD).
-
-    Returns a COPY with USD assets converted. fx_col is kept (non-investable).
-    """
-    df = returns_df.copy()
-
-    if fx_col not in df.columns:
-        return df
-
-    fx = df[fx_col].astype(float)
-
-    if usd_asset_cols is None:
-        # sensible defaults based on your column names
-        usd_asset_cols = [c for c in df.columns if c.endswith("_usd")]
-
-    for c in usd_asset_cols:
-        if c not in df.columns:
-            continue
-        df[c] = (1.0 + df[c].astype(float)) * (1.0 + fx) - 1.0
-
-    return df
-
-def run_one_mode(
-    sim: MonteCarloSimulator,
-    mode: str,
-    n_paths: int,
-    seed: int,
-    alpha: float,
-    block_size: int,
-    regime_k: int,
-    regime_vol_window: int,
-    regime_min_samples: int,
-) -> dict:
-    out = sim.simulate_paths(
-        n_paths=n_paths,
-        random_state=seed,
-        bootstrap_mode=mode,
-        block_size=block_size,
-        alpha=alpha,
-        regime_k=regime_k,
-        regime_vol_window=regime_vol_window,
-        regime_min_samples=regime_min_samples,
-        return_diagnostics=True,
-    )
-    paths, diag = out  # <-- because return_diagnostics=True
-
-    terminal = paths[:, -1]
-    survival = float(np.mean(terminal > 0.0))
-    failed = int(np.sum(terminal <= 0.0))
-
-    neg_months = diag["neg_months"]          # shape (n_paths, n_periods)
-    withdrawals = diag["withdrawals"]        # shape (n_paths, n_periods)
-
-    neg_count_per_path = neg_months.sum(axis=1)
-    total_months = neg_months.shape[1]
-
-    return {
-        "mode": mode,
-        "paths": paths,
-        "terminal": terminal,
-        "survival": survival,
-        "failed": failed,
-        "n_paths": int(n_paths),
-        "neg_months_total": int(neg_months.sum()),
-        "neg_months_per_path_median": float(np.median(neg_count_per_path)),
-        "Neg_months_per_path_mean": float(np.mean(neg_count_per_path)),
-        "neg_months_total_months": int(total_months),
-        "withdrawals": withdrawals,
-        "neg_months": neg_months,
-        "median_terminal": float(np.median(terminal)),
-        "p10_terminal": float(np.percentile(terminal, 10)),
-        "p90_terminal": float(np.percentile(terminal, 90)),
-    }
-
-def pick_paths_by_terminal_percentiles(paths: np.ndarray, percentiles: list[int]) -> np.ndarray:
-    terminal = paths[:, -1]
-    order = np.argsort(terminal)
-    n = len(order)
-    picked = []
-    for p in percentiles:
-        k = int(round((p / 100.0) * (n - 1)))
-        picked.append(paths[order[k], :])
-    return np.vstack(picked)
-
-def paths_df_year_index(paths: np.ndarray, periods_per_year: int = 12) -> pd.DataFrame:
-    years = np.arange(paths.shape[1]) / periods_per_year
-    df = pd.DataFrame(paths.T, index=years)
-    df.index.name = "Years"
-    return df
-
-def median_path_cagr_vol_mdd(paths: np.ndarray, periods_per_year: int = 12) -> tuple[float, float, float]:
-    """
-    Pick the path whose terminal wealth is closest to the median terminal wealth.
-    Compute:
-      - CAGR of wealth series (net of withdrawals, because withdrawals already applied)
-      - annualized volatility of monthly wealth returns
-      - max drawdown of wealth series
-    0..1 as fraction.
-    """
-    
-    terminal = paths[:, -1]
-    med = np.median(terminal)
-    i = int(np.argmin(np.abs(terminal - med)))
-
-    w = paths[i, :]
-    rets = w[1:] / np.maximum(w[:-1], 1e-12) - 1.0
-
-    years = (len(w) - 1) / periods_per_year
-    if w[-1] <= 0 or w[0] <= 0:
-        cagr = -1.0
-    else:
-        cagr = float((w[-1] / w[0]) ** (1.0 / max(years, 1e-12)) - 1.0)
-
-    vol = float(np.std(rets, ddof=1) * np.sqrt(periods_per_year)) if len(rets) > 2 else float("nan")
-    mdd = max_drawdown(w)
-    return cagr, vol, mdd
 
 def altair_lines_from_wide(df: pd.DataFrame, title: str, y_title: str = "CHF"):
     """
@@ -188,39 +62,11 @@ def pie_chart(weights: dict[str, float], title: str):
     ax.set_title(title)
     st.pyplot(fig)
 
-def build_comp_rows(results_list, scenario_label: str):
-    rows = []
-    for r in results_list:
-        neg = r["neg_months"]  # (n_paths, n_periods)
-        neg_per_path = neg.sum(axis=1)
-
-        rows.append({
-            "Scenario": scenario_label,
-            "Bootstrap": r["mode"].upper(),
-            "Survival": float(r["survival"]),
-            "Failed (count)": float(r["failed"]),
-            "Failed (%)": float(r["failed"] / r["n_paths"]),
-            "Neg months / path (median)": float(np.median(neg_per_path)),
-            "Neg months / path (mean)": float(np.mean(neg_per_path)),
-            "Total months": float(neg.shape[1]),
-            "Median terminal (CHF)": float(r["median_terminal"]),
-            "P10 terminal (CHF)": float(r["p10_terminal"]),
-            "P90 terminal (CHF)": float(r["p90_terminal"]),
-        })
-    return rows
-
-def max_drawdown(series: np.ndarray) -> float:
-    """
-    Max drawdown of a wealth series (0..1 as fraction).
-    """
-    x = np.asarray(series, dtype=float)
-    x = np.maximum(x, 1e-12)
-    peak = np.maximum.accumulate(x)
-    dd = 1.0 - (x / peak)
-    return float(np.max(dd))
-
-def median_path_series(paths: np.ndarray) -> np.ndarray:
-    return np.median(paths, axis=0)
+def paths_df_year_index(paths: np.ndarray, periods_per_year: int = 12) -> pd.DataFrame:
+    years = np.arange(paths.shape[1]) / periods_per_year
+    df = pd.DataFrame(paths.T, index=years)
+    df.index.name = "Years"
+    return df
 
 def main():
     st.title("Swiss Portfolio Backtesting Tool (Monte Carlo + Bootstrap + Bayesian Optimization)")
@@ -404,52 +250,57 @@ def main():
     else:
         alpha_max_floor = max(0.0, 1.0 - (w_floor / w_pref))
 
-    # In Mode A we "fix" alpha to the max allowed by floor (your earlier logic)
+    # In Mode A we "fix" alpha to the max allowed by floor 
     fixed_alpha = float(alpha_max_floor) if opt_mode == "A_survival_weights_only" else None
 
-    # base config uses preferred withdrawal as baseline
-    base_cfg = PortfolioConfig(
-        initial_capital=float(initial_capital),
-        withdrawal_rate=float(withdrawal_rate_pref),
-        horizon_years=int(horizon_years),
-        rebalance_frequency="yearly",
-        inflation_aware_withdrawals=bool(inflation_toggle),
-        inflation_col=str(inflation_col),
-    )
-
-    # optimization config
     opt_cfg = OptimizationConfig(
         n_trials=int(n_trials),
         seed=int(seed),
         target_survival=float(target_survival),
-        n_paths_eval=min(int(n_paths), 5000),  # keep it reasonable in UI
-        mode=opt_mode,
+        n_paths_eval=min(int(n_paths), 5000),
+        mode=str(opt_mode),
         alpha_min=0.0,
         alpha_max=float(alpha_max_floor if opt_mode == "A_survival_weights_only" else alpha_cap),
-        fixed_alpha=fixed_alpha,
-        bootstrap_mode="iid",       # optimize on IID for speed; compare later with all 3
+        fixed_alpha=float(alpha_max_floor) if opt_mode == "A_survival_weights_only" else None,
+        bootstrap_mode="iid",
         block_size=int(block_size),
         withdraw_mult_min=1.0,
         withdraw_mult_max=float(withdraw_mult_max),
     )
 
-    with st.spinner("Running Bayesian optimization (Optuna/TPE)..."):
-        opt_result = optimize_portfolio(
-            returns_df=returns_df_fx,
+    with st.spinner("Running pipeline: BASIC + OPTIMIZED + all bootstrap modes..."):
+        pipe = run_basic_and_optimized(
+            returns_df_fx=returns_df_fx,
             assets=assets,
-            base_config=base_cfg,
-            opt_config=opt_cfg,
-            periods_per_year=12,
+            weights_guess=weights_guess,
+            initial_capital=float(initial_capital),
+            horizon_years=int(horizon_years),
+            w_pref=float(w_pref),
+            w_floor=float(w_floor),
+            inflation_toggle=bool(inflation_toggle),
+            inflation_col=str(inflation_col),
+            opt_cfg=opt_cfg,
+            n_paths=int(n_paths),
+            seed=int(seed),
+            block_size=int(block_size),
+            regime_k=int(regime_k),
+            regime_vol_window=int(regime_vol_window),
+            regime_min_samples=int(regime_min_samples),
         )
+
+    # Unpack pipeline outputs 
+    opt_result = pipe["opt_result"]
+    basic_results = pipe["basic_results"]
+    opt_results = pipe["opt_results"]
+    comp = pipe["comp_df"]
+    perf = pipe["perf_df"]
+    alpha_basic = pipe["alpha_basic"]
+
 
     best_weights = opt_result["best_weights"]
     best_alpha = float(opt_result["best_alpha"])
     best_withdrawal_rate = float(opt_result["best_withdrawal_rate"])
-
-    # Convert best withdrawal rate to CHF/month (for readability)
-    best_monthly_chf = (best_withdrawal_rate * initial_capital) / 12.0
-
-    st.success("Optimization complete.")
+    best_monthly_chf = (best_withdrawal_rate * float(initial_capital)) / 12.0
 
     st.subheader("Optimized portfolio (from Bayesian optimization)")
     c1, c2, c3, c4 = st.columns(4)
@@ -459,78 +310,6 @@ def main():
     c4.metric("Implied monthly withdrawal", f"CHF {best_monthly_chf:,.0f}")
 
     pie_chart(best_weights, "Optimized weights (pie chart)")
-
-    # ---------------- Compare all 3 bootstrap modes with optimized params ----------------
-    cfg_best = PortfolioConfig(
-        initial_capital=float(initial_capital),
-        withdrawal_rate=float(best_withdrawal_rate),
-        horizon_years=int(horizon_years),
-        rebalance_frequency="yearly",
-        inflation_aware_withdrawals=bool(inflation_toggle),
-        inflation_col=str(inflation_col),
-    )
-
-    sim_best = MonteCarloSimulator(
-        returns=returns_df_fx,
-        asset_weights=best_weights,
-        config=cfg_best,
-        periods_per_year=12,
-    )
-
-    with st.spinner("Running simulations (IID, Block, Regime) for comparison..."):
-        results = []
-        for mode in ["iid", "block", "regime"]:
-            results.append(
-                run_one_mode(
-                    sim=sim_best,
-                    mode=mode,
-                    n_paths=int(n_paths),
-                    seed=int(seed),
-                    alpha=float(best_alpha),
-                    block_size=int(block_size),
-                    regime_k=int(regime_k),
-                    regime_vol_window=int(regime_vol_window),
-                    regime_min_samples=int(regime_min_samples),
-                )
-            )
-
-    # ---------------- BASIC (no optimization) simulation ----------------
-    alpha_basic = 0.0
-    if w_pref > 0:
-        alpha_basic = max(0.0, min(0.999, 1.0 - (w_floor / w_pref)))
-
-    cfg_basic = PortfolioConfig(
-        initial_capital=float(initial_capital),
-        withdrawal_rate=float(withdrawal_rate_pref),
-        horizon_years=int(horizon_years),
-        rebalance_frequency="yearly",
-        inflation_aware_withdrawals=bool(inflation_toggle),
-        inflation_col=str(inflation_col),
-    )
-
-    sim_basic = MonteCarloSimulator(
-        returns=returns_df_fx,
-        asset_weights=weights_guess,
-        config=cfg_basic,
-        periods_per_year=12,
-    )
-
-    with st.spinner("Running BASIC simulations (IID, Block, Regime) for comparison..."):
-        basic_results = []
-        for mode in ["iid", "block", "regime"]:
-            basic_results.append(
-                run_one_mode(
-                    sim=sim_basic,
-                    mode=mode,
-                    n_paths=int(n_paths),
-                    seed=int(seed),
-                    alpha=float(alpha_basic),
-                    block_size=int(block_size),
-                    regime_k=int(regime_k),
-                    regime_vol_window=int(regime_vol_window),
-                    regime_min_samples=int(regime_min_samples),
-                )
-            )
 
     st.subheader("Scenario definitions")
 
@@ -543,11 +322,6 @@ def main():
     """
     )
 
-    # ---------------- Bootstrap comparison table ----------------
-    comp = pd.DataFrame(
-        build_comp_rows(basic_results, "BASIC (user weights, floor rule)") +
-        build_comp_rows(results, "OPTIMIZED (Bayesian)")
-    )
 
     st.subheader("Bootstrap comparison (BASIC vs OPTIMIZED)")
     st.dataframe(
@@ -568,23 +342,6 @@ def main():
     # ---------------- Median-path return/vol/max drawdown ----------------
     st.subheader("Median-path performance (net of withdrawals)")
 
-    perf_rows = []
-    for scenario_label, res_list in [
-        ("BASIC (user)", basic_results),
-        ("OPTIMIZED", results),
-    ]:
-        for r in res_list:
-            cagr, vol, mdd = median_path_cagr_vol_mdd(r["paths"], periods_per_year=12)
-            perf_rows.append({
-                "Scenario": scenario_label,
-                "Bootstrap": r["mode"].upper(),
-                "Median-path CAGR": float(cagr),
-                "Median-path Vol (ann.)": float(vol),
-                "Median-path Max Drawdown": float(mdd),
-            })
-
-
-    perf = pd.DataFrame(perf_rows)
 
     st.dataframe(
         perf.style.format({
@@ -601,7 +358,7 @@ def main():
 
     for scenario_label, res_list in [
         ("BASIC", basic_results),
-        ("OPTIMIZED", results),
+        ("OPTIMIZED", opt_results),
     ]:
         st.markdown(f"### {scenario_label}")
         for r in res_list:
@@ -615,13 +372,13 @@ def main():
 
     st.subheader("Median path comparison of all bootstrap modes for OPTIMIZED")
 
-    years = np.arange(results[0]["paths"].shape[1]) / 12.0
+    years = np.arange(opt_results[0]["paths"].shape[1]) / 12.0
     median_df = pd.DataFrame(index=years)
     median_df.index.name = "Years"
 
 
     # OPTIMIZED
-    for r in results:
+    for r in opt_results:
         median_df[f"OPT_{r['mode'].upper()}"] = median_path_series(r["paths"])
 
     altair_lines_from_wide(median_df, "Median path comparison of all bootstrap modes for OPTIMIZED")
