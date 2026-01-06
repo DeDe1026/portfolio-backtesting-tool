@@ -8,12 +8,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import numpy as np
-import pandas as pd
-import streamlit as st
-import matplotlib.pyplot as plt
-import altair as alt
-
 from src.pipeline import (
     normalize_weights,
     apply_fx_conversion_to_chf,
@@ -21,10 +15,15 @@ from src.pipeline import (
     pick_paths_by_terminal_percentiles,
     median_path_series,
 )
-
-
 from src.data_loader import load_returns_data
 from src.optimization import OptimizationConfig
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import matplotlib.pyplot as plt
+import altair as alt
+
 
 st.set_page_config(page_title="Swiss Portfolio Backtesting Tool", layout="wide")
 

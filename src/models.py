@@ -168,7 +168,7 @@ class MonteCarloSimulator:
         self,
         n_paths: int = 1000,
         random_state: int = 42,
-        bootstrap_mode: BootstrapMode = "iid",
+        bootstrap_mode: BootstrapMode = "block",
         block_size: int = 12,
         alpha: float = 0.0,
         floor_at_zero: bool = True,

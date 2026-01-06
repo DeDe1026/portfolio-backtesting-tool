@@ -13,7 +13,7 @@ from src.inflation import load_ch_inflation_rates
 
 @dataclass
 class DatasetConfig:
-    start: str = "1975-01-01"
+    start: str = "1983-01-01"
     end: Optional[str] = None
     out_dir: Path = Path("data/raw")
     out_filename: str = "monthly_returns_native.csv"
@@ -36,7 +36,7 @@ def build_monthly_returns_dataset(cfg: DatasetConfig) -> pd.DataFrame:
 
     fetch_cfg = FetchConfig(start=cfg.start, end=cfg.end)
 
-    # --- Tickers (you can adjust later) ---
+    # --- Tickers  ---
     tickers: Dict[str, list[str]] = {
     "sp500_usd": ["^GSPC"],
     "smi_chf": ["^SSMI"],
@@ -88,7 +88,7 @@ def build_monthly_returns_dataset(cfg: DatasetConfig) -> pd.DataFrame:
 
    
 
-        # --- Swiss inflation (optional but recommended) ---
+        # --- Swiss inflation  ---
     try:
         infl = load_ch_inflation_rates()
         print("[DEBUG] Inflation series head:")

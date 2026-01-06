@@ -43,7 +43,7 @@ def parse_args():
         help="Minimum samples required to activate regime bootstrapping",)
 
     parser.add_argument("--build-data", action="store_true", help="Download/build monthly dataset into data/raw/")
-    parser.add_argument("--data-start", type=str, default="1982-01-01", help="Start date for data download (YYYY-MM-DD)")
+    parser.add_argument("--data-start", type=str, default="1983-01-01", help="Start date for data download (YYYY-MM-DD)")
     parser.add_argument("--data-file", type=str, default="data/raw/monthly_returns_native.csv", help="Path to monthly returns CSV")
     parser.add_argument("--inflation-aware-withdrawals", action="store_true", help="Increase withdrawals by realized inflation (keeps spending power constant)")
     parser.add_argument("--initial-capital", type=float, default=1_000_000.0)
