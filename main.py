@@ -1,79 +1,19 @@
+from __future__ import annotations
+
 from pathlib import Path
 import json
-import numpy as np
 import argparse
 
 from src.data_loader import load_returns_data
-from src.models import MonteCarloSimulator, PortfolioConfig
-from src.evaluation import compute_survival_rate, summarize_terminal_wealth
-from src.optimization import OptimizationConfig, optimize_portfolio, export_optuna_trials_csv
-from src.experiments import CompareConfig, run_bootstrap_comparison
-from src.compare_plots import save_survival_bar, save_terminal_boxplot, save_drawdown_boxplot
+from src.optimization import OptimizationConfig
 from src.build_dataset import DatasetConfig, build_monthly_returns_dataset
-
-def run_case(
-    sim,
-    label: str,
-    results_dir: Path,
-    n_paths: int,
-    random_state: int,
-    bootstrap_mode: str,
-    alpha: float,
-    block_size: int | None = None,
-    regime_k: int = 3,
-    regime_vol_window: int = 12,
-    regime_min_samples: int = 24,):
-
-    print("\n" + "-" * 60)
-    print(label)
-
-    paths = sim.simulate_paths(
-        n_paths=n_paths,
-        random_state=random_state,
-        bootstrap_mode=bootstrap_mode,
-        block_size=block_size,
-        alpha=alpha, 
-        regime_k=regime_k,
-        regime_vol_window=regime_vol_window,
-        regime_min_samples=regime_min_samples,)
-
-    terminal = paths[:, -1]
-    survival = float(np.mean(terminal > 0.0))
-
-    summary = {
-        "label": label,
-        "bootstrap_mode": bootstrap_mode,
-        "alpha": alpha,
-        "survival_rate": survival,
-        "median_terminal_wealth": float(np.median(terminal)),
-        "p10_terminal_wealth": float(np.percentile(terminal, 10)),
-        "p90_terminal_wealth": float(np.percentile(terminal, 90)),
-    }
-
-    print(f"Survival rate: {survival * 100:.1f}%")
-    print(f"Median terminal wealth: {summary['median_terminal_wealth']:.0f}")
-    print(
-        f"P10: {summary['p10_terminal_wealth']:.0f} | "
-        f"P90: {summary['p90_terminal_wealth']:.0f}"
-    )
-
-    out = results_dir / f"{label.replace(' ', '_').lower()}.json"
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
-
-    return summary
-
-def run_quick_eval(sim: MonteCarloSimulator, label: str, **kwargs) -> None:
-    paths = sim.simulate_paths(**kwargs)
-    terminal = paths[:, -1]
-    survival = compute_survival_rate(terminal)
-    summary = summarize_terminal_wealth(terminal)
-
-    print("\n" + "-" * 60)
-    print(label)
-    print(f"Survival rate: {survival*100:.1f}%")
-    print(f"Median terminal wealth: {summary['median']:.0f}")
-    print(f"P10: {summary['p10']:.0f} | P90: {summary['p90']:.0f}")
+from src.pipeline import (
+    normalize_weights,
+    apply_fx_conversion_to_chf,
+    run_basic_and_optimized,
+    save_weights_pie,
+    save_median_paths_plot,
+)
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -101,6 +41,22 @@ def parse_args():
     parser.add_argument("--data-start", type=str, default="1975-01-01", help="Start date for data download (YYYY-MM-DD)")
     parser.add_argument("--data-file", type=str, default="data/raw/monthly_returns_native.csv", help="Path to monthly returns CSV")
     parser.add_argument("--inflation-aware-withdrawals", action="store_true", help="Increase withdrawals by realized inflation (keeps spending power constant)")
+    parser.add_argument("--initial-capital", type=float, default=1_000_000.0)
+    parser.add_argument("--horizon-years", type=int, default=30)
+    parser.add_argument("--w-pref", type=float, default=4000.0)
+    parser.add_argument("--w-floor", type=float, default=3000.0)
+
+    parser.add_argument("--opt-mode", choices=["A","B","C"], default="B")
+    parser.add_argument("--target-survival", type=float, default=0.95)
+    parser.add_argument("--n-trials", type=int, default=80)
+    parser.add_argument("--alpha-cap", type=float, default=0.50)
+    parser.add_argument("--withdraw-mult-max", type=float, default=2.0)
+
+    parser.add_argument("--fx-col", type=str, default="usdchf")
+    parser.add_argument("--usd-assets", type=str, default="", help="Comma-separated USD columns to FX convert")
+    parser.add_argument("--inflation-col", type=str, default="ch_inflation")
+
+    parser.add_argument("--weights", type=str, default="", help="Comma-separated asset=weight, e.g. smi_chf=0.5,sp500_usd=0.5")
 
 
     return parser.parse_args()
@@ -129,135 +85,112 @@ def main() -> None:
     print(f"Loaded returns shape: {returns_df.shape}")
     print(f"Columns: {list(returns_df.columns)}")
     print(returns_df.head())
-    assets = list(returns_df.columns)
+    fx_col = args.fx_col
+    inflation_col = args.inflation_col
 
-    base_config = PortfolioConfig(
-        initial_capital=1_000_000.0,
-        withdrawal_rate=0.04,
-        horizon_years=30,
-        rebalance_frequency="yearly",
-        inflation_aware_withdrawals=args.inflation_aware_withdrawals)
+    usd_assets = [s.strip() for s in args.usd_assets.split(",") if s.strip()]
+    if not usd_assets:
+        usd_assets = [c for c in returns_df.columns if c.endswith("_usd")]
 
-    # Baseline simulator (fixed weights)
-    if len(assets) >= 2:
-        weights = {assets[0]: 0.6, assets[1]: 0.4}
+    returns_df_fx = apply_fx_conversion_to_chf(returns_df, fx_col=fx_col, usd_asset_cols=usd_assets)
+
+    assets = [c for c in returns_df_fx.columns if c not in [inflation_col, fx_col]]
+    if len(assets) < 2:
+        raise ValueError(f"Need at least 2 investable assets after excluding [{inflation_col}, {fx_col}]. Got: {assets}")
+
+    if args.weights.strip():
+        w_raw = {}
+        for kv in args.weights.split(","):
+            k, v = kv.split("=")
+            w_raw[k.strip()] = float(v.strip())
+        weights_guess = normalize_weights(w_raw)
     else:
-        weights = {assets[0]: 1.0}
+        weights_guess = {a: 1.0 / len(assets) for a in assets}
 
-    sim = MonteCarloSimulator(returns_df, weights, base_config, periods_per_year=12)
+    if args.opt_mode == "A":
+        mode = "A_survival_weights_only"
+    elif args.opt_mode == "B":
+        mode = "B_withdraw_max_subject_survival"
+    else:
+        mode = "C_survival_weights_alpha"
 
-    compare_cfg = CompareConfig(
-        n_paths=args.n_paths,
-        random_state=args.seed,
-        alpha=args.alpha,
-        block_size=args.block_size,
-        regime_k=args.regime_k,
-        regime_vol_window=args.regime_vol_window,
-        regime_min_samples=args.regime_min_samples,)
+    withdrawal_rate_pref = (12.0 * args.w_pref) / args.initial_capital
 
-        
-        # keep small for dummy data; later set 12
-        
+    alpha_max_floor = 0.0
+    if args.w_pref > 0:
+        alpha_max_floor = max(0.0, 1.0 - (args.w_floor / args.w_pref))
 
-    summary_df, outputs = run_bootstrap_comparison(sim, compare_cfg)
+    fixed_alpha = float(alpha_max_floor) if mode == "A_survival_weights_only" else None
+    alpha_max = float(alpha_max_floor if mode == "A_survival_weights_only" else args.alpha_cap)
 
-    results_dir.mkdir(parents=True, exist_ok=True)
-    summary_csv = results_dir / "compare_bootstrap_summary.csv"
-    summary_df.to_csv(summary_csv)
-    print("\nSaved comparison summary to:", summary_csv)
-    print(summary_df)
-
-    save_survival_bar(summary_df, results_dir / "compare_survival_bar.png")
-    save_terminal_boxplot(outputs, results_dir / "compare_terminal_boxplot.png")
-    save_drawdown_boxplot(outputs, results_dir / "compare_drawdown_boxplot.png")
-    print("Saved comparison plots in:", results_dir)
-
-
-    run_quick_eval(
-        sim,
-        label="Baseline IID (4% WR, alpha=0)",
-        n_paths=2000,
-        random_state=42,
-        bootstrap_mode="iid",
-        alpha=0.0,)
-
-    # --- Optimization ---
     opt_cfg = OptimizationConfig(
-        n_trials=50,
-        seed=42,
-        target_survival=0.95,
-        n_paths_eval=2000,
-        withdrawal_min=0.01,
-        withdrawal_max=0.08,
+        n_trials=int(args.n_trials),
+        seed=int(args.seed),
+        target_survival=float(args.target_survival),
+        n_paths_eval=min(int(args.n_paths), 5000),
+        mode=mode,
         alpha_min=0.0,
-        alpha_max=0.30,
+        alpha_max=alpha_max,
+        fixed_alpha=fixed_alpha,
         bootstrap_mode="iid",
-        block_size=3,)  # keep small for dummy dataset; later set to 12+ with real data
+        block_size=int(args.block_size),
+        withdraw_mult_min=1.0,
+        withdraw_mult_max=float(args.withdraw_mult_max),
+    )
 
-    print("\nStarting optimization...")
-    opt_result = optimize_portfolio(
-        returns_df=returns_df,
+
+    pipe = run_basic_and_optimized(
+        returns_df_fx=returns_df_fx,
         assets=assets,
-        base_config=base_config,
-        opt_config=opt_cfg,
-        periods_per_year=12,)
+        weights_guess=weights_guess,
+        initial_capital=float(args.initial_capital),
+        horizon_years=int(args.horizon_years),
+        w_pref=float(args.w_pref),
+        w_floor=float(args.w_floor),
+        inflation_toggle=bool(args.inflation_aware_withdrawals),
+        inflation_col=str(inflation_col),
+        opt_cfg=opt_cfg,
+        n_paths=int(args.n_paths),
+        seed=int(args.seed),
+        block_size=int(args.block_size),
+        regime_k=int(args.regime_k),
+        regime_vol_window=int(args.regime_vol_window),
+        regime_min_samples=int(args.regime_min_samples),
+    )
 
-    # Extract study (so we can export trials)
-    study = opt_result.pop("study")
+    comp_df = pipe["comp_df"]
+    perf_df = pipe["perf_df"]
+    basic_results = pipe["basic_results"]
+    opt_results = pipe["opt_results"]
+    opt_result = pipe["opt_result"]
 
-    print("\nOptimization result:")
-    print(opt_result)
+    comp_path = results_dir / "comp_basic_vs_optimized.csv"
+    perf_path = results_dir / "perf_basic_vs_optimized.csv"
+    comp_df.to_csv(comp_path, index=False)
+    perf_df.to_csv(perf_path, index=False)
 
-    # Save best result JSON
-    out_best = results_dir / "optuna_best_params.json"
-    with open(out_best, "w", encoding="utf-8") as f:
+    # opt_result contains Optuna study (not JSON-serializable)
+    opt_result = dict(opt_result)  # shallow copy to avoid side effects
+    opt_result.pop("study", None)
+
+    with open(results_dir / "best_params.json", "w", encoding="utf-8") as f:
         json.dump(opt_result, f, indent=2)
-    print(f"\nSaved best params to: {out_best}")
 
-    # ---- Commit 16 improvement: export all trials ----
-    out_trials = results_dir / "optuna_trials.csv"
-    export_optuna_trials_csv(study, str(out_trials))
-    print(f"Saved Optuna trial history to: {out_trials}")
+    save_weights_pie(opt_result["best_weights"], results_dir / "best_weights_pie.png", "Optimized weights")
+    save_median_paths_plot(basic_results, opt_results, results_dir / "median_paths_basic_vs_opt.png")
 
-    # Optional: evaluate best solution
-    best_params = opt_result["best_params"]
+    print("\n=== Bootstrap comparison (BASIC vs OPTIMIZED) ===")
+    print(comp_df.to_string(index=False))
 
-    # Normalize weights again (they were raw 0..1)
-    raw_w = [best_params[f"w_{a}"] for a in assets]
-    s = sum(raw_w) if sum(raw_w) > 0 else 1.0
-    best_weights = {a: float(best_params[f"w_{a}"] / s) for a in assets}
+    print("\n=== Median-path performance (net of withdrawals) ===")
+    print(perf_df.to_string(index=False))
 
-    best_wr = float(best_params["withdrawal_rate"])
-    best_alpha = float(best_params["alpha"])
-
-    best_cfg = PortfolioConfig(
-        initial_capital=base_config.initial_capital,
-        withdrawal_rate=best_wr,
-        horizon_years=base_config.horizon_years,
-        rebalance_frequency=base_config.rebalance_frequency,)
-    best_sim = MonteCarloSimulator(returns_df, best_weights, best_cfg, periods_per_year=12)
-
-    run_quick_eval(
-        best_sim,
-        label=f"Best found IID (WR={best_wr:.3%}, alpha={best_alpha:.1%})",
-        n_paths=5000,
-        random_state=123,
-        bootstrap_mode="iid",
-        alpha=best_alpha,
-        block_size=opt_cfg.block_size,)
-
-    run_case(
-        sim,
-        label="Regime bootstrap (K=3, vol=12)",
-        results_dir=results_dir,
-        n_paths=500,
-        random_state=42,
-        bootstrap_mode="regime",
-        alpha=0.0,
-        regime_k=3,
-        regime_vol_window=12,
-        regime_min_samples=24,)
-
+    print("\nSaved:")
+    print(" -", comp_path)
+    print(" -", perf_path)
+    print(" -", results_dir / "best_params.json")
+    print(" -", results_dir / "best_weights_pie.png")
+    print(" -", results_dir / "median_paths_basic_vs_opt.png")
 
 
 if __name__ == "__main__":
