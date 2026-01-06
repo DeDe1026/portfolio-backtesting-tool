@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from src.models import MonteCarloSimulator, PortfolioConfig
 from src.optimization import OptimizationConfig, optimize_portfolio
@@ -156,39 +154,6 @@ def median_path_series(paths: np.ndarray) -> np.ndarray:
     return np.median(paths, axis=0)
 
 
-def save_weights_pie(weights: dict[str, float], out_path: Path, title: str) -> None:
-    fig, ax = plt.subplots()
-    ax.pie(list(weights.values()), labels=list(weights.keys()), autopct="%1.1f%%")
-    ax.set_title(title)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=160)
-    plt.close(fig)
-
-
-def save_median_paths_plot(
-    basic_results: list[dict[str, Any]],
-    opt_results: list[dict[str, Any]],
-    out_path: Path,
-    periods_per_year: int = 12,
-) -> None:
-    years = np.arange(basic_results[0]["paths"].shape[1]) / periods_per_year
-    fig, ax = plt.subplots()
-
-    for r in basic_results:
-        ax.plot(years, median_path_series(r["paths"]), label=f"BASIC_{r['mode'].upper()}")
-
-    for r in opt_results:
-        ax.plot(years, median_path_series(r["paths"]), label=f"OPT_{r['mode'].upper()}")
-
-    ax.set_xlabel("Years")
-    ax.set_ylabel("Wealth (CHF)")
-    ax.set_title("Median wealth path — BASIC vs OPTIMIZED")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=160)
-    plt.close(fig)
-
-
 def run_basic_and_optimized(
     returns_df_fx: pd.DataFrame,
     assets: list[str],
@@ -251,7 +216,7 @@ def run_basic_and_optimized(
             )
         )
 
-    # OPTIMIZATION base cfg uses preferred withdrawal baseline (as you do in Streamlit)
+    # OPTIMIZATION base cfg uses preferred withdrawal baseline 
     base_cfg = PortfolioConfig(
         initial_capital=float(initial_capital),
         withdrawal_rate=float(withdrawal_rate_pref),
@@ -324,3 +289,59 @@ def run_basic_and_optimized(
         "alpha_basic": float(alpha_basic),
         "withdrawal_rate_pref": float(withdrawal_rate_pref),
     }
+
+
+def format_table_for_csv(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Returns a COPY where numeric columns are formatted as strings:
+      - wealth columns (contain 'CHF' or 'wealth' or 'terminal') => 2 decimals + thousands separators
+      - percent/ratio columns (contain 'Survival', 'CAGR', 'Vol', 'Drawdown', 'Failed (%)') => percent with 2 decimals
+      - counts/integers => comma separated, no decimals
+      - other floats => 2 decimals + thousands separators
+    """
+    out = df.copy()
+
+    def is_wealth_col(col: str) -> bool:
+        c = col.lower()
+        return ("chf" in c) or ("wealth" in c) or ("terminal" in c)
+
+    def is_percent_col(col: str) -> bool:
+        c = col.lower()
+        return (
+            "survival" in c
+            or "cagr" in c
+            or "vol" in c
+            or "drawdown" in c
+            or "failed (%)" in c
+        )
+
+    def format_value(col: str, v):
+        if pd.isna(v):
+            return ""
+        # keep strings as-is
+        if isinstance(v, str):
+            return v
+
+        # ints / integer-like
+        if isinstance(v, (int, np.integer)):
+            return f"{int(v):,}"
+
+        # floats
+        if isinstance(v, (float, np.floating)):
+            if is_wealth_col(col):
+                return f"{v:,.2f}"
+            if is_percent_col(col):
+                return f"{v:.2%}"
+            # default non-wealth float: 2 decimals
+            return f"{v:,.2f}"
+
+        # fallback
+        return str(v)
+
+    for col in out.columns:
+        # format numeric columns; keep non-numeric unchanged
+        if pd.api.types.is_numeric_dtype(out[col]):
+            out[col] = out[col].map(lambda v, c=col: format_value(c, v))
+
+    return out
+
