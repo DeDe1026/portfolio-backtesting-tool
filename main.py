@@ -11,15 +11,20 @@ from src.pipeline import (
     normalize_weights,
     apply_fx_conversion_to_chf,
     run_basic_and_optimized,
+    format_table_for_csv,
+)
+from src.compare_plots import (
     save_weights_pie,
     save_median_paths_plot,
+    save_representative_paths_plot,
 )
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Monte Carlo portfolio backtesting with multiple bootstrap modes")
 
-    parser.add_argument("--n-paths", type=int, default=2000, help="Number of Monte Carlo paths")
+    parser.add_argument("--n-paths", type=int, default=1000, help="Number of Monte Carlo paths")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     parser.add_argument("--alpha", type=float, default=0.0, help="Withdrawal reduction factor")
@@ -38,7 +43,7 @@ def parse_args():
         help="Minimum samples required to activate regime bootstrapping",)
 
     parser.add_argument("--build-data", action="store_true", help="Download/build monthly dataset into data/raw/")
-    parser.add_argument("--data-start", type=str, default="1975-01-01", help="Start date for data download (YYYY-MM-DD)")
+    parser.add_argument("--data-start", type=str, default="1982-01-01", help="Start date for data download (YYYY-MM-DD)")
     parser.add_argument("--data-file", type=str, default="data/raw/monthly_returns_native.csv", help="Path to monthly returns CSV")
     parser.add_argument("--inflation-aware-withdrawals", action="store_true", help="Increase withdrawals by realized inflation (keeps spending power constant)")
     parser.add_argument("--initial-capital", type=float, default=1_000_000.0)
@@ -48,7 +53,7 @@ def parse_args():
 
     parser.add_argument("--opt-mode", choices=["A","B","C"], default="B")
     parser.add_argument("--target-survival", type=float, default=0.95)
-    parser.add_argument("--n-trials", type=int, default=80)
+    parser.add_argument("--n-trials", type=int, default=50)
     parser.add_argument("--alpha-cap", type=float, default=0.50)
     parser.add_argument("--withdraw-mult-max", type=float, default=2.0)
 
@@ -114,7 +119,6 @@ def main() -> None:
     else:
         mode = "C_survival_weights_alpha"
 
-    withdrawal_rate_pref = (12.0 * args.w_pref) / args.initial_capital
 
     alpha_max_floor = 0.0
     if args.w_pref > 0:
@@ -127,7 +131,7 @@ def main() -> None:
         n_trials=int(args.n_trials),
         seed=int(args.seed),
         target_survival=float(args.target_survival),
-        n_paths_eval=min(int(args.n_paths), 5000),
+        n_paths_eval=min(int(args.n_paths), 1000),
         mode=mode,
         alpha_min=0.0,
         alpha_max=alpha_max,
@@ -164,10 +168,18 @@ def main() -> None:
     opt_results = pipe["opt_results"]
     opt_result = pipe["opt_result"]
 
+    # Save RAW (machine readable)
+    comp_raw_path = results_dir / "comp_basic_vs_optimized_raw.csv"
+    perf_raw_path = results_dir / "perf_basic_vs_optimized_raw.csv"
+    comp_df.to_csv(comp_raw_path, index=False)
+    perf_df.to_csv(perf_raw_path, index=False)
+
+    # Save FORMATTED (human/streamlit-like)
     comp_path = results_dir / "comp_basic_vs_optimized.csv"
     perf_path = results_dir / "perf_basic_vs_optimized.csv"
-    comp_df.to_csv(comp_path, index=False)
-    perf_df.to_csv(perf_path, index=False)
+    format_table_for_csv(comp_df).to_csv(comp_path, index=False)
+    format_table_for_csv(perf_df).to_csv(perf_path, index=False)
+
 
     # opt_result contains Optuna study (not JSON-serializable)
     opt_result = dict(opt_result)  # shallow copy to avoid side effects
@@ -179,6 +191,23 @@ def main() -> None:
     save_weights_pie(opt_result["best_weights"], results_dir / "best_weights_pie.png", "Optimized weights")
     save_median_paths_plot(basic_results, opt_results, results_dir / "median_paths_basic_vs_opt.png")
 
+    # 6 representative-path plots: BASIC/OPT × iid/block/regime
+    for r in basic_results:
+        mode = r["mode"].lower()
+        save_representative_paths_plot(
+            paths=r["paths"],
+            out_path=results_dir / f"rep_paths_basic_{mode}.png",
+            title=f"BASIC representative paths — {mode.upper()}",
+        )
+
+    for r in opt_results:
+        mode = r["mode"].lower()
+        save_representative_paths_plot(
+            paths=r["paths"],
+            out_path=results_dir / f"rep_paths_opt_{mode}.png",
+            title=f"OPTIMIZED representative paths — {mode.upper()}",
+        )
+
     print("\n=== Bootstrap comparison (BASIC vs OPTIMIZED) ===")
     print(comp_df.to_string(index=False))
 
@@ -186,6 +215,8 @@ def main() -> None:
     print(perf_df.to_string(index=False))
 
     print("\nSaved:")
+    print(" -", comp_raw_path)
+    print(" -", perf_raw_path)
     print(" -", comp_path)
     print(" -", perf_path)
     print(" -", results_dir / "best_params.json")
