@@ -2,18 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
-import numpy as np
 import pandas as pd
 
-# yfinance is very convenient for daily market data
 import yfinance as yf
 
 
 @dataclass
 class FetchConfig:
-    start: str = "1975-01-01"   # aim 50 years
+    start: str = "1982-01-01"   # aim 50 years
     end: Optional[str] = None  # None => today
     price_field: str = "Adj Close"  # for equities/ETFs; FX sometimes only has Close
     cache_dir: Path = Path("data/raw_cache")

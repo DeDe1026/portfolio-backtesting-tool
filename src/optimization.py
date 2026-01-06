@@ -18,17 +18,17 @@ class OptimizationConfig:
     n_trials: int = 50
     seed: int = 42
     target_survival: float = 0.95
-    n_paths_eval: int = 2000
+    n_paths_eval: int = 1000
 
     # Which optimization logic to use
-    mode: OptimizationMode = "A_survival_weights_only"
+    mode: OptimizationMode = "B_withdraw_max_subject_survival"
 
     # Search ranges
     withdrawal_min: float = 0.01
     withdrawal_max: float = 0.08
 
     alpha_min: float = 0.0
-    alpha_max: float = 0.30
+    alpha_max: float = 0.50
 
     # For Mode B: multiply the user's baseline withdrawal rate
     withdraw_mult_min: float = 1.0
@@ -38,7 +38,7 @@ class OptimizationConfig:
     fixed_alpha: Optional[float] = None
 
     # Bootstrap settings during optimization
-    bootstrap_mode: Literal["iid", "block"] = "iid"
+    bootstrap_mode: Literal["iid", "block"] = "block"
     block_size: int = 12
 
 
@@ -67,7 +67,6 @@ def export_optuna_trials_csv(study: optuna.Study, out_path: str) -> None:
 
 def _evaluate_trial(
     returns_df: pd.DataFrame,
-    assets: list[str],
     weights: Dict[str, float],
     base_config: PortfolioConfig,
     withdrawal_rate: float,
@@ -170,7 +169,6 @@ def optimize_portfolio(
         # 3) evaluate
         survival, med_terminal = _evaluate_trial(
             returns_df=returns_df,
-            assets=assets,
             weights=weights,
             base_config=base_config,
             withdrawal_rate=withdrawal_rate,
@@ -232,8 +230,6 @@ def optimize_portfolio(
         best_withdrawal_rate = base_rate
 
     return {
-        "best_value": best.value,
-        "best_params": best_params,
         "best_weights": best_weights,
         "best_alpha": best_alpha,
         "best_withdrawal_rate": float(best_withdrawal_rate),
