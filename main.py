@@ -136,7 +136,7 @@ def main() -> None:
         alpha_min=0.0,
         alpha_max=alpha_max,
         fixed_alpha=fixed_alpha,
-        bootstrap_mode="iid",
+        bootstrap_mode="block",
         block_size=int(args.block_size),
         withdraw_mult_min=1.0,
         withdraw_mult_max=float(args.withdraw_mult_max),
