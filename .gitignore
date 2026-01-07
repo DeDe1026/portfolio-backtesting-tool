@@ -19,6 +19,4 @@ Thumbs.db
 .env/
 conda-meta/
 
-# Results (optional: keep plots but not huge files)
-results/*.csv
-results/*.pkl
+
