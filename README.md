@@ -5,7 +5,7 @@
 A Monte Carlo portfolio backtesting tool (inspired by PortfolioVisualizer) with:
 - historical simple iid, block and regime bootstrapping through K-means ML
 - terminal wealth distribution and withdrawal simulation
-- Bayesian optimization for allocation and withdrawal parameters
+- Bayesian optimization for allocation, "alpha" and withdrawal parameters
 - UI (Streamlit)
 
 ## Datas type
