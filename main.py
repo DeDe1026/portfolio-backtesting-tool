@@ -5,7 +5,7 @@ import json
 import argparse
 
 from src.data_loader import load_returns_data
-from src.optimization import OptimizationConfig
+from src.optimization import OptimizationConfig, export_optuna_trials_csv
 from src.build_dataset import DatasetConfig, build_monthly_returns_dataset
 from src.pipeline import (
     normalize_weights,
@@ -194,6 +194,14 @@ def main() -> None:
     basic_results = pipe["basic_results"]
     opt_results = pipe["opt_results"]
     opt_result = pipe["opt_result"]
+
+    # Export Optuna trials (needs the Study object)
+    study = opt_result.get("study")
+    if study is not None:
+        trials_path = results_dir / "optuna_trials.csv"
+        export_optuna_trials_csv(study, str(trials_path))
+        print(" -", trials_path)
+
 
     # Save RAW (machine readable)
     comp_raw_path = results_dir / "comp_basic_vs_optimized_raw.csv"
