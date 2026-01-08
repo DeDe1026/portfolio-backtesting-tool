@@ -95,6 +95,9 @@ def run_one_mode(
     regime_k: int,
     regime_vol_window: int,
     regime_min_samples: int,
+    withdrawal_rule: str = "alpha_cut",
+    preferred_withdrawal=None,
+    withdrawal_floor=None
 ) -> dict[str, Any]:
     paths, diag = sim.simulate_paths(
         n_paths=n_paths,
@@ -102,9 +105,12 @@ def run_one_mode(
         bootstrap_mode=mode,
         block_size=block_size,
         alpha=alpha,
+        withdrawal_rule=withdrawal_rule,  
         regime_k=regime_k,
         regime_vol_window=regime_vol_window,
         regime_min_samples=regime_min_samples,
+        preferred_withdrawal=preferred_withdrawal,
+        withdrawal_floor=withdrawal_floor,
         return_diagnostics=True,
     )
 
@@ -173,7 +179,7 @@ def run_basic_and_optimized(
 ) -> dict[str, Any]:
     """
     Runs:
-      - BASIC: user weights + floor rule via alpha_basic
+      - BASIC: user weights + floor rule (across all 3 bootstrap modes) via withdrawal_rule="neg_to_floor"
       - OPTIMIZED: optuna returns best weights/alpha/withdrawal_rate, then simulate across all 3 bootstrap modes
 
     Returns dict with:
@@ -184,11 +190,6 @@ def run_basic_and_optimized(
       - opt_result (best weights/alpha/withdrawal)
     """
     withdrawal_rate_pref = (12.0 * w_pref) / initial_capital if initial_capital > 0 else 0.0
-
-    # BASIC alpha implied by floor vs preferred
-    alpha_basic = 0.0
-    if w_pref > 0:
-        alpha_basic = max(0.0, min(0.999, 1.0 - (w_floor / w_pref)))
 
     cfg_basic = PortfolioConfig(
         initial_capital=float(initial_capital),
@@ -210,10 +211,18 @@ def run_basic_and_optimized(
     for mode in BOOTSTRAP_MODES:
         basic_results.append(
             run_one_mode(
-                sim_basic, mode, n_paths, seed, float(alpha_basic),
-                block_size, regime_k, regime_vol_window, regime_min_samples
+                sim_basic, mode, n_paths, seed, alpha=0.0,
+                block_size=block_size,
+                regime_k=regime_k,
+                regime_vol_window=regime_vol_window,
+                regime_min_samples=regime_min_samples,
+                preferred_withdrawal=float(w_pref),      
+                withdrawal_floor=float(w_floor),
+                withdrawal_rule="neg_to_floor",          
+                
             )
         )
+        
 
     # OPTIMIZATION base cfg uses preferred withdrawal baseline 
     base_cfg = PortfolioConfig(
@@ -224,6 +233,11 @@ def run_basic_and_optimized(
         inflation_aware_withdrawals=bool(inflation_toggle),
         inflation_col=str(inflation_col),
     )
+
+    # ensure Mode A has the strict-rule amounts available inside optimization
+    if opt_cfg.mode == "A_survival_weights_only":
+        opt_cfg.preferred_withdrawal = float(w_pref)
+        opt_cfg.withdrawal_floor = float(w_floor)
 
     opt_result = optimize_portfolio(
         returns_df=returns_df_fx,
@@ -252,14 +266,27 @@ def run_basic_and_optimized(
         periods_per_year=12,
     )
 
+    use_floor_rule = (opt_cfg.mode == "A_survival_weights_only")
+
     opt_results = []
     for mode in BOOTSTRAP_MODES:
         opt_results.append(
             run_one_mode(
-                sim_best, mode, n_paths, seed, best_alpha,
-                block_size, regime_k, regime_vol_window, regime_min_samples
+                sim_best,
+                mode,
+                n_paths,
+                seed,
+                alpha=float(best_alpha),
+                block_size=block_size,
+                regime_k=regime_k,
+                regime_vol_window=regime_vol_window,
+                regime_min_samples=regime_min_samples,
+                withdrawal_rule=("neg_to_floor" if use_floor_rule else "alpha_cut"),
+                preferred_withdrawal=(float(w_pref) if use_floor_rule else None),
+                withdrawal_floor=(float(w_floor) if use_floor_rule else None),
             )
         )
+
 
     comp_df = pd.DataFrame(
         build_comp_rows(basic_results, "BASIC (user weights, floor rule)") +
@@ -285,7 +312,8 @@ def run_basic_and_optimized(
         "basic_results": basic_results,
         "opt_results": opt_results,
         "opt_result": opt_result,
-        "alpha_basic": float(alpha_basic),
+        "basic_withdrawal_rule": "neg_to_floor",
+        "opt_withdrawal_rule": ("neg_to_floor" if use_floor_rule else "alpha_cut"),
         "withdrawal_rate_pref": float(withdrawal_rate_pref),
     }
 

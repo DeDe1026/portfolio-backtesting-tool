@@ -19,6 +19,14 @@ from src.compare_plots import (
     save_representative_paths_plot,
 )
 
+DEFAULT_WEIGHTS = {
+    "sp500_usd": 1.00,
+    "smi_chf": 0.0,
+    "gold_usd": 0.0,
+    "us_gov_bonds_usd": 0.0,
+    "ch_gov_bonds_chf": 0.0,
+}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -45,13 +53,14 @@ def parse_args():
     parser.add_argument("--build-data", action="store_true", help="Download/build monthly dataset into data/raw/")
     parser.add_argument("--data-start", type=str, default="1983-01-01", help="Start date for data download (YYYY-MM-DD)")
     parser.add_argument("--data-file", type=str, default="data/raw/monthly_returns_native.csv", help="Path to monthly returns CSV")
-    parser.add_argument("--inflation-aware-withdrawals", action="store_true", help="Increase withdrawals by realized inflation (keeps spending power constant)")
+    parser.add_argument("--no-inflation-aware-withdrawals", dest="inflation_aware_withdrawals", action="store_true", help="Disable inflation-adjusted withdrawals (default is enabled).",)
+    parser.set_defaults(inflation_aware_withdrawals=True)
     parser.add_argument("--initial-capital", type=float, default=1_000_000.0)
     parser.add_argument("--horizon-years", type=int, default=30)
     parser.add_argument("--w-pref", type=float, default=4000.0)
     parser.add_argument("--w-floor", type=float, default=3000.0)
 
-    parser.add_argument("--opt-mode", choices=["A","B","C"], default="B")
+    parser.add_argument("--opt-mode", choices=["A","B","C"], default="A")
     parser.add_argument("--target-survival", type=float, default=0.95)
     parser.add_argument("--n-trials", type=int, default=50)
     parser.add_argument("--alpha-cap", type=float, default=0.50)
@@ -110,7 +119,13 @@ def main() -> None:
             w_raw[k.strip()] = float(v.strip())
         weights_guess = normalize_weights(w_raw)
     else:
-        weights_guess = {a: 1.0 / len(assets) for a in assets}
+        # Use default portfolio (fallback)
+        weights_guess = normalize_weights({
+            a: DEFAULT_WEIGHTS.get(a, 0.0) for a in assets
+        })
+    weights_guess = {a: weights_guess[a] for a in assets if a in weights_guess}
+    weights_guess = normalize_weights(weights_guess)
+
 
     if args.opt_mode == "A":
         mode = "A_survival_weights_only"
@@ -124,8 +139,19 @@ def main() -> None:
     if args.w_pref > 0:
         alpha_max_floor = max(0.0, 1.0 - (args.w_floor / args.w_pref))
 
-    fixed_alpha = float(alpha_max_floor) if mode == "A_survival_weights_only" else None
     alpha_max = float(alpha_max_floor if mode == "A_survival_weights_only" else args.alpha_cap)
+
+    if mode == "A_survival_weights_only":
+        alpha_min = 0.0
+        alpha_max = 0.0
+        pref_w = float(args.w_pref)
+        floor_w = float(args.w_floor)
+    else:
+        alpha_min = 0.0
+        alpha_max = float(args.alpha_cap)
+        pref_w = None
+        floor_w = None
+
 
     opt_cfg = OptimizationConfig(
         n_trials=int(args.n_trials),
@@ -133,9 +159,10 @@ def main() -> None:
         target_survival=float(args.target_survival),
         n_paths_eval=min(int(args.n_paths), 1000),
         mode=mode,
-        alpha_min=0.0,
+        alpha_min=alpha_min,
         alpha_max=alpha_max,
-        fixed_alpha=fixed_alpha,
+        preferred_withdrawal=pref_w,
+        withdrawal_floor=floor_w,
         bootstrap_mode="block",
         block_size=int(args.block_size),
         withdraw_mult_min=1.0,

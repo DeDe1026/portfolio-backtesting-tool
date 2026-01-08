@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# --- Make sure project root is on PYTHONPATH so `import src...` works ---
+# --- Ensuring project root is on PYTHONPATH so `import src...` works ---
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -92,7 +92,7 @@ def main():
         regime_min_samples = st.number_input("Min samples per regime", min_value=12, max_value=240, value=24, step=1)
 
         st.header("Simulation")
-        n_paths = st.number_input("Monte Carlo paths", min_value=200, max_value=50000, value=5000, step=500)
+        n_paths = st.number_input("Monte Carlo paths", min_value=200, max_value=50000, value=1000, step=500)
         seed = st.number_input("Random seed", min_value=0, max_value=10_000_000, value=42, step=1)
 
         st.header("Optimization")
@@ -106,7 +106,7 @@ def main():
         )
 
         target_survival = st.slider("Target survival (used in Mode B)", 0.50, 0.99, 0.95, 0.01)
-        n_trials = st.number_input("Optuna trials", min_value=10, max_value=400, value=80, step=10)
+        n_trials = st.number_input("Optuna trials", min_value=10, max_value=400, value=50, step=10)
 
         st.caption("Alpha search cap for modes that optimize alpha (B/C).")
         alpha_cap = st.slider("Alpha max (optimization cap)", 0.0, 0.80, 0.50, 0.05)
@@ -243,29 +243,36 @@ def main():
     else:
         opt_mode = "C_survival_weights_alpha"
 
-    # For Mode A: alpha is constrained by floor vs preferred
-    if w_pref <= 0:
-        alpha_max_floor = 0.0
+    # For Mode A: alpha is constrained by floor vs preferred, else use alpha_cap
+    if opt_mode == "A_survival_weights_only":
+        alpha_min = 0.0
+        alpha_max = 0.0
+        
     else:
-        alpha_max_floor = max(0.0, 1.0 - (w_floor / w_pref))
-
-    # In Mode A we "fix" alpha to the max allowed by floor 
-    fixed_alpha = float(alpha_max_floor) if opt_mode == "A_survival_weights_only" else None
+        alpha_min = 0.0
+        alpha_max = float(alpha_cap)
+        
 
     opt_cfg = OptimizationConfig(
         n_trials=int(n_trials),
         seed=int(seed),
         target_survival=float(target_survival),
-        n_paths_eval=min(int(n_paths), 5000),
+        n_paths_eval=min(int(n_paths), 1000),
         mode=str(opt_mode),
-        alpha_min=0.0,
-        alpha_max=float(alpha_max_floor if opt_mode == "A_survival_weights_only" else alpha_cap),
-        fixed_alpha=float(alpha_max_floor) if opt_mode == "A_survival_weights_only" else None,
-        bootstrap_mode="iid",
+
+        alpha_min=float(alpha_min),
+        alpha_max=float(alpha_max),
+
+        bootstrap_mode="block",
         block_size=int(block_size),
+
         withdraw_mult_min=1.0,
         withdraw_mult_max=float(withdraw_mult_max),
+
+        preferred_withdrawal=(float(w_pref) if opt_mode == "A_survival_weights_only" else None),
+        withdrawal_floor=(float(w_floor) if opt_mode == "A_survival_weights_only" else None),
     )
+
 
     with st.spinner("Running pipeline: BASIC + OPTIMIZED + all bootstrap modes..."):
         pipe = run_basic_and_optimized(
@@ -293,7 +300,6 @@ def main():
     opt_results = pipe["opt_results"]
     comp = pipe["comp_df"]
     perf = pipe["perf_df"]
-    alpha_basic = pipe["alpha_basic"]
 
 
     best_weights = opt_result["best_weights"]
@@ -314,8 +320,8 @@ def main():
 
     st.markdown(
         f"""
-    **BASIC:** user weights, preferred withdrawal CHF {w_pref:,.2f} / month, and in negative months withdrawal becomes floor CHF {w_floor:,.2f}  
-    → implemented as **alpha_basic = {alpha_basic:.2%}**
+    **BASIC:** user weights, preferred withdrawal CHF {w_pref:,.2f} / month, and in negative months withdrawal becomes floor {w_floor:,.2f} CHF
+    
 
     **OPTIMIZED:** Bayesian optimization chooses weights + alpha + withdrawal rate (per selected optimization mode).
     """

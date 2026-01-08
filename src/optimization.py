@@ -21,12 +21,12 @@ class OptimizationConfig:
     n_paths_eval: int = 1000
 
     # Which optimization logic to use
-    mode: OptimizationMode = "B_withdraw_max_subject_survival"
+    mode: OptimizationMode = "A_survival_weights_only"
 
     # Search ranges
     withdrawal_min: float = 0.01
     withdrawal_max: float = 0.08
-
+    # Alpha range
     alpha_min: float = 0.0
     alpha_max: float = 0.50
 
@@ -34,8 +34,10 @@ class OptimizationConfig:
     withdraw_mult_min: float = 1.0
     withdraw_mult_max: float = 2.0
 
-    # For Mode A: optionally enforce alpha implied by floor (you set this externally)
-    fixed_alpha: Optional[float] = None
+    # For Mode A: enforce alpha implied by floor 
+    preferred_withdrawal: Optional[float] = None  # CHF/month
+    withdrawal_floor: Optional[float] = None      # CHF/month
+
 
     # Bootstrap settings during optimization
     bootstrap_mode: Literal["iid", "block"] = "block"
@@ -94,12 +96,17 @@ def _evaluate_trial(
         periods_per_year=periods_per_year,
     )
 
+    use_floor_rule = (opt_config.mode == "A_survival_weights_only")
+
     paths = sim.simulate_paths(
         n_paths=opt_config.n_paths_eval,
         random_state=opt_config.seed,
         bootstrap_mode=bootstrap_mode,
         block_size=opt_config.block_size,
         alpha=alpha,
+        withdrawal_rule=("neg_to_floor" if use_floor_rule else "alpha_cut"),
+        preferred_withdrawal=(opt_config.preferred_withdrawal if use_floor_rule else None),
+        withdrawal_floor=(opt_config.withdrawal_floor if use_floor_rule else None),
     )
 
     terminal = paths[:, -1]
@@ -121,7 +128,7 @@ def optimize_portfolio(
 
     A) mode="A_survival_weights_only"
        - optimize weights only
-       - alpha is fixed via opt_config.fixed_alpha (or 0)
+       - alpha is 0 because floor rule is used
        - withdrawal_rate is base_config.withdrawal_rate
        - objective: maximize survival (tie-break with terminal wealth)
 
@@ -151,7 +158,7 @@ def optimize_portfolio(
 
         # 2) choose alpha + withdrawal rate depending on mode
         if opt_config.mode == "A_survival_weights_only":
-            alpha = float(opt_config.fixed_alpha) if opt_config.fixed_alpha is not None else 0.0
+            alpha = 0.0
             withdrawal_rate = base_rate
 
         elif opt_config.mode == "B_withdraw_max_subject_survival":
@@ -215,7 +222,7 @@ def optimize_portfolio(
 
     # infer alpha and withdrawal rate
     if opt_config.mode == "A_survival_weights_only":
-        best_alpha = float(opt_config.fixed_alpha) if opt_config.fixed_alpha is not None else 0.0
+        best_alpha = 0.0
         best_withdraw_mult = 1.0
         best_withdrawal_rate = base_rate
 
@@ -240,7 +247,6 @@ def optimize_portfolio(
         "mode": opt_config.mode,
         "bootstrap_mode": bootstrap_mode,
         "block_size": opt_config.block_size,
-        "study": study,
     }
 
 

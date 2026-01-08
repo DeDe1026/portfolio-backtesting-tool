@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from src.regime import RegimeConfig, build_regime_features, fit_kmeans_regimes, compute_regime_transition_matrix, sample_regime_sequence
 from dataclasses import dataclass
 from typing import Dict, Optional, Literal
 
+import warnings
 import numpy as np
 import pandas as pd
-import warnings
 
+from src.regime import RegimeConfig, build_regime_features, fit_kmeans_regimes, compute_regime_transition_matrix, sample_regime_sequence
+
+
+WithdrawalRule = Literal["alpha_cut", "neg_to_floor"]
 
 BootstrapMode = Literal["iid", "block", "regime"]
 
@@ -171,10 +174,13 @@ class MonteCarloSimulator:
         bootstrap_mode: BootstrapMode = "block",
         block_size: int = 12,
         alpha: float = 0.0,
+        withdrawal_rule: WithdrawalRule = "alpha_cut",
         floor_at_zero: bool = True,
         regime_k: int = 3,
         regime_vol_window: int = 12,
         regime_min_samples: int = 24,
+        preferred_withdrawal: float | None = None,
+        withdrawal_floor: float | None = None,
         return_withdrawals: bool = False,
         return_diagnostics: bool = False,) -> np.ndarray | tuple[np.ndarray, dict[str, np.ndarray]]:
         """
@@ -210,16 +216,13 @@ class MonteCarloSimulator:
         rng = np.random.default_rng(random_state)
         n_periods = self.config.horizon_years * self.periods_per_year
 
-        # Fixed withdrawal amount per period (classic constant-dollar rule)
-        base_withdrawal = self.config.initial_capital * self.config.withdrawal_rate / self.periods_per_year
-
         # Prepare return matrix for selected assets
         hist_returns = self.returns[self.assets].to_numpy(dtype=float)  # shape (n_hist, n_assets)
 
         paths = np.zeros((n_paths, n_periods + 1), dtype=float)
         paths[:, 0] = self.config.initial_capital
 
-        # Diagnostics (optional)
+        # Diagnostics 
         if return_diagnostics:
             diag_withdrawals = np.zeros((n_paths, n_periods), dtype=float)
             diag_neg_month = np.zeros((n_paths, n_periods), dtype=bool)
@@ -240,6 +243,17 @@ class MonteCarloSimulator:
             infl_values = None
 
         for p in range(n_paths):
+            if preferred_withdrawal is not None:
+                withdraw_amt = float(preferred_withdrawal)
+            else:
+                withdraw_amt = (
+                    self.config.initial_capital
+                    * self.config.withdrawal_rate
+                    / self.periods_per_year
+                )
+
+            pref_amt = float(preferred_withdrawal) if preferred_withdrawal is not None else None
+            floor_amt = float(withdrawal_floor) if withdrawal_floor is not None else None
             # Sample indices
             if bootstrap_mode == "iid":
                 idx = self._sample_indices_iid(rng, n_periods)
@@ -267,10 +281,11 @@ class MonteCarloSimulator:
             # Holdings per asset
             holdings = self.config.initial_capital * self.weights_vec.copy()
 
-            withdraw_amt = base_withdrawal  # will be inflation-adjusted over time (if enabled)
-
-
             for t in range(n_periods):
+
+                # START-OF-MONTH weights (before returns)
+                start_total = float(holdings.sum())
+                start_w = holdings / start_total if start_total > 0 else self.weights_vec
                 # 1) Apply asset returns to holdings
                 holdings *= (1.0 + R[t, :])
 
@@ -284,10 +299,8 @@ class MonteCarloSimulator:
 
                 # 2) Compute portfolio return for alpha rule
                 # portfolio return = weighted return based on holdings weights *at start of month*
-                # Here we approximate using current weights after growth (acceptable for this project).
                 if total_before_withdraw > 0:
-                    current_w = holdings / total_before_withdraw
-                    port_r = float(np.dot(current_w, R[t, :]))
+                    port_r = float(np.dot(start_w, R[t, :]))
                 else:
                     port_r = -1.0
 
@@ -296,10 +309,33 @@ class MonteCarloSimulator:
                     diag_neg_month[p, t] = (port_r < 0.0)
 
 
-                # 3) Withdraw
-                withdrawal = withdraw_amt
-                if port_r < 0 and alpha > 0:
-                    withdrawal *= (1.0 - alpha)
+                # 3) Compute withdrawal (either alpha_cut or strict neg_to_floor)
+                if withdrawal_rule == "neg_to_floor":
+                    if pref_amt is None or floor_amt is None:
+                        raise ValueError("withdrawal_rule='neg_to_floor' requires preferred_withdrawal and withdrawal_floor.")
+
+                    if floor_amt > pref_amt:
+                        raise ValueError("withdrawal_floor must be <= preferred_withdrawal for withdrawal_rule='neg_to_floor'.")
+                    # Strict rule:
+                    #   negative month -> floor
+                    #   non-negative month -> preferred
+                    withdrawal = float(floor_amt if port_r < 0.0 else pref_amt)
+                    
+
+
+                else:
+                    # Default legacy behavior: start from withdraw_amt (preferred), cut by alpha in negative months,
+                    withdrawal = float(withdraw_amt)
+
+                    if port_r < 0.0 and alpha > 0.0:
+                        withdrawal *= (1.0 - alpha)
+
+                    if withdrawal_floor is not None:
+                        withdrawal = max(withdrawal, float(withdrawal_floor))
+
+
+                # Cannot withdraw more than total wealth
+                withdrawal = min(withdrawal, total_before_withdraw)
 
                 if return_diagnostics:
                     diag_withdrawals[p, t] = float(withdrawal)
@@ -320,8 +356,13 @@ class MonteCarloSimulator:
 
                 # 3b) Inflation-adjust next period's base withdrawal (keeps real spending constant)
                 if infl_values is not None:
-                    # use the inflation value corresponding to the sampled historical month
-                    withdraw_amt *= (1.0 + float(infl_values[idx[t]]))
+                    infl = 1.0 + float(infl_values[idx[t]])
+                    withdraw_amt *= infl
+                    if pref_amt is not None:
+                        pref_amt *= infl
+                    if floor_amt is not None:
+                        floor_amt *= infl
+
 
                 # 4) Rebalance (yearly)
                 if self.config.rebalance_frequency == "yearly":
@@ -345,4 +386,5 @@ class MonteCarloSimulator:
         return paths, diagnostics
 
         
+
 
