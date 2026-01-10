@@ -1,0 +1,2 @@
+AI, through ChatGPT 5.2, helped me with Bash commands, provided me with the structure, the skeleton of my project in terms of what files were needed, what packages, libraries and dependencies were required. Furthermore, it implemented the baseline logic of the project in terms of code. I then coded on top of the skeleton it provided me with, to match exactly the outcome I wanted. ChatGPT also helped me format my report's text corpus to the LaTex format.
+Copilot helped me with debugging and overall error handling. 

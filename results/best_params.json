@@ -1,15 +1,15 @@
 {
   "best_weights": {
-    "sp500_usd": 0.2665146113599302,
-    "smi_chf": 0.14280591570915283,
-    "gold_usd": 0.4187507741465802,
-    "us_gov_bonds_usd": 0.06779692632121456,
-    "ch_gov_bonds_chf": 0.10413177246312212
+    "sp500_usd": 0.7023818075868873,
+    "smi_chf": 0.06825627275145081,
+    "gold_usd": 0.13572972791134505,
+    "us_gov_bonds_usd": 0.04003835647125638,
+    "ch_gov_bonds_chf": 0.05359383527906054
   },
-  "best_alpha": 0.47210582035029175,
-  "best_withdrawal_rate": 0.06324374441282334,
-  "best_withdraw_mult": 1.3175780086004862,
-  "best_trial_number": 43,
+  "best_alpha": 0.4595340531170811,
+  "best_withdrawal_rate": 0.0586005201228277,
+  "best_withdraw_mult": 1.4650130030706925,
+  "best_trial_number": 42,
   "n_trials": 50,
   "target_survival": 0.95,
   "mode": "B_withdraw_max_subject_survival",

@@ -44,10 +44,7 @@ df = df.sort_values("date")
 # Normalize to month-end
 df["date"] = df["date"].dt.to_period("M").dt.to_timestamp("M")
 
-# Heuristic conversion: if values look like percent units (e.g., 2.1 means 2.1%)
-# Your example 0.021 could mean 2.1% monthly (too high), or 0.021% (too low),
-# BUT in Swiss monthly inflation datasets, values are usually in percent units like 0.2, 0.3 etc.
-# We'll decide based on magnitude:
+# Heuristic conversion: if values look like percent units (e.g. 0.2, 0.3, 1.1 ...), convert to decimal units (0.002, 0.003, 0.011 ...)
 med = df["ch_inflation"].median()
 if med > 0.05:  # e.g. 0.2, 0.3, 1.1 ... percent units
     df["ch_inflation"] = df["ch_inflation"] / 100.0

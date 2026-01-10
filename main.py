@@ -20,8 +20,8 @@ from src.compare_plots import (
 )
 
 DEFAULT_WEIGHTS = {
-    "sp500_usd": 1.00,
-    "smi_chf": 0.0,
+    "sp500_usd": 0.5,
+    "smi_chf": 0.5,
     "gold_usd": 0.0,
     "us_gov_bonds_usd": 0.0,
     "ch_gov_bonds_chf": 0.0,
@@ -51,16 +51,16 @@ def parse_args():
         help="Minimum samples required to activate regime bootstrapping",)
 
     parser.add_argument("--build-data", action="store_true", help="Download/build monthly dataset into data/raw/")
-    parser.add_argument("--data-start", type=str, default="1983-01-01", help="Start date for data download (YYYY-MM-DD)")
+    parser.add_argument("--data-start", type=str, default="1975-01-01", help="Start date for data download (YYYY-MM-DD)")
     parser.add_argument("--data-file", type=str, default="data/raw/monthly_returns_native.csv", help="Path to monthly returns CSV")
     parser.add_argument("--no-inflation-aware-withdrawals", dest="inflation_aware_withdrawals", action="store_true", help="Disable inflation-adjusted withdrawals (default is enabled).",)
     parser.set_defaults(inflation_aware_withdrawals=True)
-    parser.add_argument("--initial-capital", type=float, default=1_000_000.0)
+    parser.add_argument("--initial-capital", type=float, default=1_200_000.0)
     parser.add_argument("--horizon-years", type=int, default=30)
     parser.add_argument("--w-pref", type=float, default=4000.0)
     parser.add_argument("--w-floor", type=float, default=3000.0)
 
-    parser.add_argument("--opt-mode", choices=["A","B","C"], default="A")
+    parser.add_argument("--opt-mode", choices=["A","B","C"], default="B")
     parser.add_argument("--target-survival", type=float, default=0.95)
     parser.add_argument("--n-trials", type=int, default=50)
     parser.add_argument("--alpha-cap", type=float, default=0.50)

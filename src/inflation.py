@@ -22,7 +22,7 @@ def load_ch_inflation_rates(
 
     df = pd.read_csv(path, sep=sep, encoding="utf-8", engine="python")
 
-    # Drop totally empty columns (Excel often adds these)
+    # Drop totally empty columns 
     df = df.dropna(axis=1, how="all")
 
     # Normalize col names

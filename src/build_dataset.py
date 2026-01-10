@@ -13,7 +13,7 @@ from src.inflation import load_ch_inflation_rates
 
 @dataclass
 class DatasetConfig:
-    start: str = "1983-01-01"
+    start: str = "1975-01-01"
     end: Optional[str] = None
     out_dir: Path = Path("data/raw")
     out_filename: str = "monthly_returns_native.csv"
@@ -45,7 +45,7 @@ def build_monthly_returns_dataset(cfg: DatasetConfig) -> pd.DataFrame:
     "gold_usd": ["GC=F", "XAUUSD=X"],
     # US Treasuries proxy (20y or aggregated bonds)
     "us_gov_bonds_usd": ["TLT", "BND"],
-    # Swiss gov bonds CHF proxy (if one fails, try another CHF bond ETF symbol you prefer, 0-3y or 7-15y)
+    # Swiss gov bonds CHF proxy (if one fails, try another CHF bond ETF symbol you prefer, 7-15y or 0-3y)
     "ch_gov_bonds_chf": ["CSBGC0.SW", "CSBGC3.SW"],}
 
 

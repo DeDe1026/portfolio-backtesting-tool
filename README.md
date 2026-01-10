@@ -2,7 +2,7 @@
 # Monte Carlo Portfolio Simulator
 
 ## Research Question
-For a predefined investor's financial situation, what asset allocation gives him the best portfolio survival odds, for a given optimization mode and different bootstrapping methods, using Bayesian optimization machine learning?
+How does sustainability, for a multi-asset, multi-currency portfolio under fixed, inflation-adjusted withdrawals vary across different historical bootstrapping assumptions, and how can portfolio allocations be optimized to maximize survival and/or spending?
 
 ## What
 A Monte Carlo portfolio backtesting tool (inspired by PortfolioVisualizer) with:
@@ -71,7 +71,7 @@ This is not a percentage floor — it is a true spending floor
 
     - Objective: maximize survival
 
-## Datas type
+## Datas type (price returns, no dividends)
 - ^GSPC (S&P 500)
 - USDCHF=X (USD/CHF)
 - ^SSMI (SMI)
@@ -96,19 +96,20 @@ Expected output:
 - Best optimization results JSON file
 - streamlit browser page launched when Streamlit is run
 
+```
 ## Project structure
 portfolio-backtesting-tool/
 │
 ├── app/
 │   └── streamlit_app.py          # Interactive UI
-|
-|── data/
-|   |── raw_cache/                # daily asset datas
+│
+├── data/
+│   |── raw_cache/                # daily asset datas
 │   └── raw/
 │       └── monthly_returns_native.csv
-|       └── switzerland_inflation_monthly_clean.csv
-|       └── switzerland_inflation_monthly.csv
-|
+│       └── switzerland_inflation_monthly_clean.csv
+│       └── switzerland_inflation_monthly.csv
+│
 ├── results/
 │   ├── comp_basic_vs_optimized.csv # clean and raw
 │   ├── perf_basic_vs_optimized.csv # clean and raw
@@ -118,24 +119,25 @@ portfolio-backtesting-tool/
 │
 ├── scripts/
 │   └── clean_fso_inflation_csv.py  # Inflation CSV loading and cleaning
-|
+│
 ├── src/
 │   ├── models.py                 # Monte Carlo engine (core logic)
 │   ├── pipeline.py               # BASIC + OPTIMIZED orchestration
 │   ├── optimization.py           # Optuna optimization logic
 │   ├── compare_plots.py          # All plotting logic (CLI outputs)
-|   ├── inflation.py              # Inflation computation logic 
+│   ├── inflation.py              # Inflation computation logic 
 │   ├── data_fetcher.py           # Data fetching from yfinance
 │   ├── data_loader.py            # CSV loading + validation
 │   ├── regime.py                 # Regime bootstrapping
 │   └── build_dataset.py          # Monthly returns data builder
 │
 ├── .gitignore                    # Github tracking limits framework
+├── AI_Usage.md               
 ├── environemnt.yml               # Dependencies
 ├── main.py                       # CLI entry point
 ├── Proposal.md                   
 └── README.md
-
+```
 ## Results
 Depend on inputs values (see Technical report charts, plots and tables for results of a specific scenario)
 

@@ -21,7 +21,7 @@ class OptimizationConfig:
     n_paths_eval: int = 1000
 
     # Which optimization logic to use
-    mode: OptimizationMode = "A_survival_weights_only"
+    mode: OptimizationMode = "B_withdraw_max_subject_survival"
 
     # Search ranges
     withdrawal_min: float = 0.01
@@ -247,6 +247,7 @@ def optimize_portfolio(
         "mode": opt_config.mode,
         "bootstrap_mode": bootstrap_mode,
         "block_size": opt_config.block_size,
+        "study": study,
     }
 
 
